@@ -1,124 +1,196 @@
 <!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>지도 데이터 연결 테스트</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>버스 노선도 게임 · 프로토타입</title>
 <style>
-body{font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:16px;background:#f2f3f0;color:#1f2328}
-h3{margin:0 0 12px}
-select,button{font:inherit;padding:10px 14px;border:0;border-radius:10px;margin:0 6px 6px 0}
-select{background:#fff;color:#1f2328}
-button{background:#1f2328;color:#fff;font-weight:600}
-button:disabled{opacity:.4}
-button.sub{background:#fff;color:#1f2328}
-pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:6px}
+:root{--bg:#f2f3f0;--ink:#1f2328;--road:#d3d6ce;--card:#fff;--mut:#6b7078;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16181b;--ink:#ecedee;--road:#30343a;--card:#24272b;--mut:#9a9fa6}}
+:root[data-theme="dark"]{--bg:#16181b;--ink:#ecedee;--road:#30343a;--card:#24272b;--mut:#9a9fa6}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Noto Sans KR",sans-serif;display:flex;flex-direction:column;overflow:hidden;user-select:none;-webkit-user-select:none}
+#hud{padding:8px 14px 2px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px}#sp{margin:0;background:var(--card)}#h2{font-weight:400;color:var(--mut);font-size:12px}
+#w{flex:1;position:relative;min-height:0;overflow:hidden}
+canvas{position:absolute;left:0;top:0;touch-action:none}
+#panel{display:none;position:absolute;left:8px;right:8px;top:6px;background:var(--card);border-radius:14px;padding:10px 12px;box-shadow:0 2px 14px #0004;pointer-events:none;opacity:.96}
+#panel button{pointer-events:auto}
+#bar{display:flex;gap:6px;padding:6px 12px 10px;overflow-x:auto}
+button{border:0;border-radius:10px;padding:10px 14px;min-width:44px;font:inherit;font-weight:600;background:var(--bg);color:var(--ink);margin:4px 4px 0 0;flex:none}
+#bar button{background:var(--card);margin:0}
+button.on{outline:3px solid var(--ink)}button:disabled{opacity:.4}
+.m{color:var(--mut);font-size:12px;margin-top:2px}
 </style></head><body>
-<h3>동네 지도 데이터 연결 테스트</h3>
-<select id="pl">
- <option value="berlin">베를린 프렌츨라우어 베르크</option>
- <option value="bongseon">광주 봉선동</option>
-</select><br>
-<button id="go">실행</button><button id="clr" class="sub">저장값 지우기</button>
-<pre id="log">동네를 고르고 버튼을 한 번만 눌러 주세요. 서버가 바쁠 땐 연달아 누르지 말고 30초 이상 기다려 주세요.</pre>
+<div id="hud"><div><div id="h1"></div><div id="h2"></div></div><button id="sp" data-a="s"></button></div>
+<div id="w"><canvas id="c"></canvas><div id="panel"></div></div>
+<div id="bar"></div>
 <script>
-const L=document.getElementById('log'),B=document.getElementById('go'),PL=document.getElementById('pl');
-const say=t=>{L.textContent+=(L.textContent?'\n':'')+t};
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const SERVERS=[
- 'https://overpass-api.de/api/interpreter',
- 'https://lz4.overpass-api.de/api/interpreter',
- 'https://z.overpass-api.de/api/interpreter',
- 'https://overpass.kumi.systems/api/interpreter',
- 'https://overpass.private.coffee/api/interpreter'
-];
-// 좌표 범위를 미리 알고 있는 동네는 경계 검색 요청을 생략한다 (대략적인 범위)
-const PLACES={
- berlin:{label:'베를린 프렌츨라우어 베르크',bb:{S:52.530,W:13.405,N:52.550,E:13.440}},
- bongseon:{label:'광주 봉선동',find:/^봉선[0-9]?동$/.source,area:[34.9,126.5,35.4,127.3],pl:'^봉선'}
-};
-const KEY_PREF='osm:pref:v1',keyBB=id=>'osm:bb:'+id+':v1';
-const lget=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
-const lset=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
-let pref=+lget(KEY_PREF)||0;
-
-function short(e){
- if(!e)return '알 수 없음';
- if(e.name==='AbortError')return '시간 초과';
- const m=String(e.message||e);
- if(/^HTTP (429|502|503|504)/.test(m))return '서버 혼잡 ('+m.slice(0,8).trim()+')';
- if(e.name==='TypeError')return '연결 안 됨 ('+m.slice(0,30)+')';
- return m.slice(0,90);
-}
-async function once(url,ql,ms){
- const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);
- try{
-  const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:c.signal});
-  if(!r.ok){const tx=(await r.text()).replace(/\s+/g,' ').slice(0,100);throw new Error('HTTP '+r.status+' '+tx)}
-  return await r.json();
- }finally{clearTimeout(t)}
-}
-// 서버를 한 번씩 돌아가며 시도 (재시도 반복은 하지 않음)
-async function ovAny(ql){
- const n=SERVERS.length;let last;
- for(let k=0;k<n;k++){
-  const i=(pref+k)%n,host=SERVERS[i].replace('https://','').split('/')[0];
-  try{
-   const t0=performance.now();
-   const j=await once(SERVERS[i],ql,25000);
-   say(`   ✅ ${host} (${Math.round(performance.now()-t0)}ms)`);
-   pref=i;lset(KEY_PREF,i);
-   return j;
-  }catch(e){last=e;say(`   ✖ ${host}: ${short(e)}`)}
- }
- throw last||new Error('모든 서버 실패');
-}
-// 경계를 모르는 동네: 행정경계를 찾고, 없으면 지명 위치 주변으로
-async function findBox(p){
- const a=p.area.join(',');
- const j=await ovAny(`[out:json][timeout:25];rel["name"~"${p.find}"]["boundary"="administrative"](${a});out bounds;`);
- const els=(j.elements||[]).filter(e=>e.bounds);
- if(els.length){
-  say(`   행정경계 ${els.length}개를 합쳤어요`);
-  return{S:Math.min(...els.map(e=>e.bounds.minlat)),W:Math.min(...els.map(e=>e.bounds.minlon)),N:Math.max(...els.map(e=>e.bounds.maxlat)),E:Math.max(...els.map(e=>e.bounds.maxlon))};
- }
- say('   행정경계가 없어서 지명 위치로 대체해요');
- const j2=await ovAny(`[out:json][timeout:25];nwr["name"~"${p.pl}"]["place"](${a});out center;`);
- const q=(j2.elements||[]).map(e=>e.center||(e.lat!=null?{lat:e.lat,lon:e.lon}:null)).find(Boolean);
- if(!q)throw new Error('동네를 찾지 못함');
- const d=0.012;
- return{S:q.lat-d,W:q.lon-d,N:q.lat+d,E:q.lon+d};
-}
-async function run(){
- L.textContent='';B.disabled=true;
- const id=PL.value,p=PLACES[id];
- try{
-  say(`1. ${p.label} 범위`);
-  let bb=p.bb||lget(keyBB(id));
-  if(p.bb)say('   미리 정해 둔 범위를 사용해요 (요청 생략)');
-  else if(bb)say('   저장된 범위를 사용해요');
-  else{bb=await findBox(p);lset(keyBB(id),bb)}
-  say(`   위도 ${bb.S.toFixed(4)}~${bb.N.toFixed(4)}, 경도 ${bb.W.toFixed(4)}~${bb.E.toFixed(4)}`);
-  say('\n2. 도로·건물·버스정류장 개수 (개수만 세는 가벼운 요청 1번)');
-  const x=`(${bb.S},${bb.W},${bb.N},${bb.E})`;
-  const j=await ovAny(`[out:json][timeout:30];
-way["highway"]${x}->.r;
-way["building"]${x}->.b;
-way["building"~"^(apartments|residential|house|detached|terrace|dormitory)$"]${x}->.res;
-way["building"~"^(commercial|retail|office|industrial|warehouse)$"]${x}->.wk;
-way["building"~"^(school|university|college|hospital|public|civic|government|kindergarten)$"]${x}->.pb;
-node["highway"="bus_stop"]${x}->.s;
-.r out count;.b out count;.res out count;.wk out count;.pb out count;.s out count;`);
-  const c=(j.elements||[]).filter(e=>e.type==='count').map(e=>+(e.tags&&e.tags.total)||0);
-  if(c.length<6)throw new Error('개수 응답이 이상해요');
-  const [r,b,res,wk,pb,s]=c,typed=res+wk+pb,pct=b?Math.round(typed/b*100):0;
-  say(`   도로 ${r}개 / 버스정류장 ${s}개`);
-  say(`   건물 ${b}개 중 용도가 구분된 건물 ${typed}개 (${pct}%)`);
-  say(`   · 주거 ${res} · 일터 ${wk} · 공공 ${pb}`);
-  say('\n✅ 지도 데이터 받기 성공');
- }catch(e){
-  say('\n❌ 실패: '+short(e));
-  say('서버가 바쁜 시간대일 수 있어요. 몇 분 뒤 다시 눌러 보세요.');
- }finally{B.disabled=false}
-}
-B.onclick=run;
-document.getElementById('clr').onclick=()=>{try{Object.keys(localStorage).filter(k=>k.startsWith('osm:')).forEach(k=>localStorage.removeItem(k))}catch(e){}pref=0;say('\n저장값을 지웠어요.')};
+// 실제 지도 데이터 (OpenStreetMap, BBBike 추출). 좌표는 게임 화면 기준 픽셀(1px ≈ 5m).
+const MAP={"name":"서울대입구역 일대 (관악구)","W":360,"H":540,"mpp":5.0,"nodes":[[135.2,298.1],[112.2,273.9],[30.3,514.6],[283.7,291.2],[314.2,306.5],[99.2,67.0],[116.5,250.9],[72.9,26.5],[120.8,215.8],[64.7,256.9],[95.5,212.5],[292.6,50.6],[129.0,345.6],[154.7,326.0],[106.3,318.6],[103.4,341.5],[240.2,248.1],[305.5,150.0],[68.3,227.5],[93.1,229.9],[128.4,138.1],[290.8,167.2],[340.9,375.5],[354.8,326.7],[270.6,391.3],[89.6,529.1],[188.7,338.1],[234.8,187.8],[50.8,286.5],[249.3,157.4],[224.0,364.1],[232.0,413.5],[227.8,387.3],[51.6,410.7],[23.0,214.8],[33.0,455.2],[44.3,223.6],[17.1,466.6],[109.4,294.9],[210.7,285.9],[39.1,301.7],[162.9,280.3],[188.7,273.5],[89.7,260.0],[137.9,277.0],[73.0,290.3],[269.4,162.0],[207.7,307.0],[155.0,300.5],[184.7,304.2],[238.3,283.5],[273.8,342.0],[277.8,368.4],[308.8,352.8],[279.8,323.2],[244.2,311.4],[242.1,334.0],[29.0,498.2],[221.2,321.0],[167.8,236.2],[193.6,239.4],[196.9,212.7],[224.2,200.8],[200.8,178.6],[145.3,218.7],[302.8,330.3],[160.4,191.2],[337.2,454.4],[134.5,188.3],[230.7,266.8],[333.2,316.0],[7.0,185.9],[13.5,231.1],[116.7,101.5],[71.8,197.6],[77.1,42.1],[351.9,389.9],[140.9,251.0],[165.2,257.0],[190.8,257.4],[212.9,260.3],[31.6,199.5],[113.6,185.1],[243.4,70.9],[124.1,10.5],[208.2,149.7],[163.6,20.8],[47.5,537.6],[47.5,517.9],[76.1,360.6],[126.3,366.8],[8.2,518.6],[132.9,316.5],[147.4,342.0],[37.5,273.5],[33.8,252.4],[82.5,508.7],[212.1,530.9],[317.9,368.9],[22.5,364.6],[35.4,374.9],[205.2,341.7],[78.7,338.6],[12.4,336.3],[251.3,188.2],[231.9,94.3],[34.7,319.4],[215.9,120.4],[29.6,478.8],[44.0,428.7],[18.7,405.9],[34.9,403.1],[359.1,112.2],[12.1,430.4],[326.4,149.8],[356.2,66.2],[342.5,353.6],[26.8,439.6],[167.1,520.3],[6.5,447.6],[100.5,363.9],[349.5,127.8],[145.2,74.9],[169.0,123.6],[325.5,112.0],[36.7,156.3],[274.4,190.0],[334.4,338.7],[127.7,158.5],[76.7,174.9],[14.0,305.9],[62.5,494.3],[76.1,269.1],[64.0,393.6],[235.1,435.9],[84.6,141.4],[77.0,157.0],[58.4,312.1],[215.4,242.2],[312.2,88.5],[7.9,372.3],[48.0,386.0],[333.7,82.3],[249.0,204.5],[343.0,107.3],[172.6,202.2],[351.1,30.7],[81.4,315.3],[181.0,160.8],[155.3,151.7],[255.7,277.8],[2.1,279.2],[50.8,205.7],[3.7,155.2],[358.9,263.4],[103.7,1.4],[148.0,534.9],[21.8,530.2],[348.8,497.7],[359.5,436.7],[264.0,411.9],[181.0,356.5],[170.2,4.6],[53.7,463.4],[358.1,161.6],[358.1,2.2],[1.5,487.0],[298.7,9.6],[68.9,3.1],[324.1,525.1],[348.8,415.1],[2.5,252.6],[153.5,356.9],[0.7,394.7],[198.4,195.9],[17.9,273.2]],"edges":[[130,151,37.5,[14.0,305.9,17.9,285.9,2.1,279.2]],[3,4,34.1,[283.7,291.2,314.2,306.5]],[4,70,21.2,[314.2,306.5,333.2,316.0]],[23,70,24.2,[354.8,326.7,333.2,316.0]],[3,16,65.8,[283.7,291.2,282.2,277.9,279.0,272.4,260.5,258.6,240.2,248.1]],[3,69,59.4,[283.7,291.2,270.4,281.7,241.9,267.6,230.7,266.8]],[81,152,20.4,[31.6,199.5,43.2,204.7,50.8,205.7]],[71,81,28.1,[7.0,185.9,31.6,199.5]],[71,136,76.0,[7.0,185.9,19.2,177.8,77.0,157.0]],[72,95,30.7,[13.5,231.1,25.0,249.2,33.8,252.4]],[20,73,38.7,[128.4,138.1,121.2,123.6,116.7,101.5]],[5,73,39.0,[99.2,67.0,111.3,85.3,116.7,101.5]],[73,122,43.3,[116.7,101.5,138.8,93.9,145.2,74.9]],[125,153,33.0,[36.7,156.3,3.7,155.2]],[10,74,29.8,[95.5,212.5,84.2,211.1,71.8,197.6]],[74,129,23.2,[71.8,197.6,76.7,174.9]],[7,75,16.1,[72.9,26.5,77.1,42.1]],[5,75,33.3,[99.2,67.0,77.1,42.1]],[9,43,25.2,[64.7,256.9,89.7,260.0]],[6,43,33.8,[116.5,250.9,95.9,248.5,89.7,260.0]],[50,69,18.4,[238.3,283.5,230.7,266.8]],[22,76,19.1,[340.9,375.5,346.8,378.4,351.9,389.9]],[76,170,41.3,[351.9,389.9,359.9,417.5,351.7,418.3,348.8,415.1]],[34,72,18.9,[23.0,214.8,13.5,231.1]],[36,72,37.9,[44.3,223.6,34.6,236.1,20.1,230.6,13.5,231.1]],[70,154,60.4,[333.2,316.0,349.2,283.2,347.8,276.5,358.9,263.4]],[18,36,24.3,[68.3,227.5,44.3,223.6]],[6,19,32.2,[116.5,250.9,107.0,246.7,93.1,229.9]],[18,19,24.9,[68.3,227.5,93.1,229.9]],[6,77,24.4,[116.5,250.9,140.9,251.0]],[1,6,23.4,[112.2,273.9,116.5,250.9]],[8,82,35.1,[120.8,215.8,111.1,207.0,113.6,185.1]],[8,10,25.5,[120.8,215.8,95.5,212.5]],[64,77,32.6,[145.3,218.7,140.9,251.0]],[44,77,26.1,[137.9,277.0,140.9,251.0]],[77,78,25.0,[140.9,251.0,165.2,257.0]],[41,78,23.5,[162.9,280.3,165.2,257.0]],[78,79,25.6,[165.2,257.0,190.8,257.4]],[59,78,21.0,[167.8,236.2,165.2,257.0]],[60,79,18.3,[193.6,239.4,190.8,257.4]],[79,80,22.3,[190.8,257.4,212.9,260.3]],[42,79,16.2,[188.7,273.5,190.8,257.4]],[80,138,18.3,[212.9,260.3,215.4,242.2]],[34,81,17.6,[23.0,214.8,31.6,199.5]],[10,82,37.2,[95.5,212.5,97.9,197.6,112.2,191.6,113.6,185.1]],[7,168,24.1,[72.9,26.5,69.5,17.6,68.9,3.1]],[7,155,46.6,[72.9,26.5,88.2,26.5,94.3,24.5,103.7,1.4]],[8,68,31.3,[120.8,215.8,121.8,208.1,134.5,188.3]],[30,101,33.7,[224.0,364.1,221.5,348.1,205.2,341.7]],[30,32,23.5,[224.0,364.1,227.8,387.3]],[82,129,40.9,[113.6,185.1,112.3,182.3,91.4,172.8,76.7,174.9]],[68,82,21.2,[134.5,188.3,113.6,185.1]],[9,95,31.3,[64.7,256.9,33.8,252.4]],[25,96,22.1,[89.6,529.1,82.8,516.2,82.5,508.7]],[25,118,92.5,[89.6,529.1,96.1,521.7,107.8,532.9,118.9,538.1,125.8,538.3,132.3,535.6,153.8,519.4,167.1,520.3]],[83,86,96.4,[243.4,70.9,238.8,68.6,222.4,50.7,200.3,33.1,163.6,20.8]],[83,105,26.1,[243.4,70.9,231.9,94.3]],[11,83,53.9,[292.6,50.6,277.5,57.9,263.7,60.6,252.3,68.3,243.4,70.9]],[1,44,25.9,[112.2,273.9,137.9,277.0]],[1,43,29.1,[112.2,273.9,104.2,261.8,89.7,260.0]],[6,8,35.4,[116.5,250.9,120.8,215.8]],[8,64,24.7,[120.8,215.8,145.3,218.7]],[39,80,25.7,[210.7,285.9,212.9,260.3]],[26,47,39.8,[188.7,338.1,202.4,330.8,207.7,307.0]],[47,49,23.2,[207.7,307.0,184.7,304.2]],[26,101,16.9,[188.7,338.1,205.2,341.7]],[71,125,48.8,[7.0,185.9,8.8,169.0,35.4,159.7,36.7,156.3]],[10,19,17.6,[95.5,212.5,93.1,229.9]],[84,122,78.8,[124.1,10.5,121.8,13.3,122.0,20.0,130.1,40.4,138.2,43.4,138.1,55.2,146.6,57.7,145.2,74.9]],[84,86,41.4,[124.1,10.5,130.3,15.0,163.6,20.8]],[118,156,24.1,[167.1,520.3,148.0,534.9]],[63,85,31.9,[200.8,178.6,198.8,163.1,208.2,149.7]],[85,149,54.1,[208.2,149.7,175.5,145.6,155.3,151.7]],[9,18,29.7,[64.7,256.9,68.3,227.5]],[86,162,17.5,[163.6,20.8,170.2,4.6]],[11,167,42.2,[292.6,50.6,296.0,46.2,298.7,9.6]],[87,88,19.7,[47.5,537.6,47.5,517.9]],[2,87,29.2,[30.3,514.6,36.2,526.9,47.5,537.6]],[2,88,17.4,[30.3,514.6,47.5,517.9]],[89,120,24.6,[76.1,360.6,100.5,363.9]],[89,102,22.1,[76.1,360.6,78.7,338.6]],[13,49,39.0,[154.7,326.0,167.5,314.3,173.5,315.0,184.7,304.2]],[13,48,25.5,[154.7,326.0,155.0,300.5]],[12,90,21.4,[129.0,345.6,126.3,366.8]],[90,120,26.0,[126.3,366.8,100.5,363.9]],[2,91,22.6,[30.3,514.6,8.2,518.6]],[0,92,18.6,[135.2,298.1,132.9,316.5]],[13,92,23.8,[154.7,326.0,132.9,316.5]],[91,157,18.8,[8.2,518.6,15.5,528.5,21.8,530.2]],[12,15,26.0,[129.0,345.6,103.4,341.5]],[12,93,18.7,[129.0,345.6,147.4,342.0]],[13,93,17.6,[154.7,326.0,147.4,342.0]],[14,147,25.2,[106.3,318.6,81.4,315.3]],[14,92,27.4,[106.3,318.6,121.4,320.6,132.9,316.5]],[14,15,23.1,[106.3,318.6,103.4,341.5]],[12,92,29.3,[129.0,345.6,132.9,316.5]],[15,102,24.9,[103.4,341.5,78.7,338.6]],[15,120,22.5,[103.4,341.5,100.5,363.9]],[118,158,189.5,[167.1,520.3,180.3,511.8,212.2,497.0,228.8,491.4,254.1,488.0,288.3,487.7,324.8,495.3,348.8,497.7]],[28,94,20.2,[50.8,286.5,38.6,279.7,37.5,273.5]],[94,95,21.4,[37.5,273.5,33.8,252.4]],[16,21,95.8,[240.2,248.1,287.6,178.1,290.8,167.2]],[16,69,21.0,[240.2,248.1,230.7,266.8]],[17,124,43.3,[305.5,150.0,321.7,125.3,325.5,112.0]],[17,21,22.7,[305.5,150.0,290.8,167.2]],[17,114,20.9,[305.5,150.0,326.4,149.8]],[28,40,19.2,[50.8,286.5,39.1,301.7]],[69,80,18.9,[230.7,266.8,212.9,260.3]],[16,80,31.3,[240.2,248.1,226.3,259.2,212.9,260.3]],[9,94,31.9,[64.7,256.9,37.5,273.5]],[67,159,29.5,[337.2,454.4,341.7,454.3,359.5,436.7]],[96,131,24.7,[82.5,508.7,62.5,494.3]],[97,134,98.3,[212.1,530.9,231.5,466.3,234.8,451.2,235.1,435.9]],[20,135,44.5,[128.4,138.1,103.7,136.6,84.6,141.4]],[20,149,30.4,[128.4,138.1,140.5,146.8,155.3,151.7]],[85,107,43.3,[208.2,149.7,221.1,150.3,215.9,120.4]],[29,85,41.8,[249.3,157.4,208.2,149.7]],[21,46,22.1,[290.8,167.2,269.4,162.0]],[21,126,28.1,[290.8,167.2,274.4,190.0]],[22,116,22.0,[340.9,375.5,342.5,353.6]],[22,98,33.8,[340.9,375.5,321.3,381.7,317.9,368.9]],[22,67,79.4,[340.9,375.5,342.8,422.0,337.2,454.4]],[5,122,46.9,[99.2,67.0,118.9,68.3,145.2,74.9]],[24,52,24.0,[270.6,391.3,277.8,368.4]],[24,160,21.6,[270.6,391.3,264.0,411.9]],[53,98,18.5,[308.8,352.8,317.9,368.9]],[45,147,26.3,[73.0,290.3,81.4,315.3]],[99,103,38.3,[22.5,364.6,4.7,342.1,12.4,336.3]],[89,99,56.6,[76.1,360.6,37.7,355.5,32.2,357.3,22.5,364.6]],[52,98,40.9,[277.8,368.4,290.9,372.4,317.9,368.9]],[99,100,16.5,[22.5,364.6,35.4,374.9]],[100,140,39.5,[35.4,374.9,9.6,384.2,7.9,372.3]],[26,161,19.9,[188.7,338.1,181.0,356.5]],[26,49,34.2,[188.7,338.1,184.7,304.2]],[102,147,23.5,[78.7,338.6,81.4,315.3]],[103,106,28.0,[12.4,336.3,34.7,319.4]],[13,26,36.1,[154.7,326.0,188.7,338.1]],[27,63,36.4,[234.8,187.8,220.6,179.1,200.8,178.6]],[104,143,16.8,[251.3,188.2,248.1,199.2,249.0,204.5]],[27,104,16.7,[234.8,187.8,242.3,189.2,251.3,188.2]],[27,85,46.4,[234.8,187.8,208.2,149.7]],[63,148,26.6,[200.8,178.6,181.0,160.8]],[27,62,16.8,[234.8,187.8,224.2,200.8]],[105,107,31.1,[231.9,94.3,227.6,103.4,219.8,111.2,215.9,120.4]],[28,45,22.6,[50.8,286.5,73.0,290.3]],[40,106,18.2,[39.1,301.7,34.7,319.4]],[29,105,71.7,[249.3,157.4,252.7,131.4,248.4,107.3,231.9,94.3]],[46,105,99.8,[269.4,162.0,273.9,132.2,277.4,122.9,276.7,116.0,263.2,100.6,258.2,97.5,231.9,94.3]],[29,104,31.4,[249.3,157.4,247.2,166.2,251.3,188.2]],[29,46,20.6,[249.3,157.4,269.4,162.0]],[23,116,29.5,[354.8,326.7,342.5,353.6]],[107,123,51.1,[215.9,120.4,191.0,118.9,178.4,128.2,169.0,123.6]],[31,134,22.5,[232.0,413.5,235.1,435.9]],[31,32,26.6,[232.0,413.5,227.8,387.3]],[57,108,26.9,[29.0,498.2,38.1,490.3,37.4,486.4,29.6,478.8]],[35,108,27.9,[33.0,455.2,38.4,468.7,29.6,478.8]],[33,133,21.1,[51.6,410.7,64.0,393.6]],[33,111,18.4,[51.6,410.7,34.9,403.1]],[37,108,17.4,[17.1,466.6,29.6,478.8]],[35,163,23.7,[33.0,455.2,45.2,464.2,53.7,463.4]],[109,110,34.5,[44.0,428.7,35.2,417.3,18.7,405.9]],[33,109,19.5,[51.6,410.7,44.0,428.7]],[34,36,23.0,[23.0,214.8,44.3,223.6]],[11,146,63.2,[292.6,50.6,313.2,45.1,343.3,29.2,351.1,30.7]],[35,117,16.8,[33.0,455.2,26.8,439.6]],[35,37,19.9,[33.0,455.2,26.3,457.8,17.1,466.6]],[109,117,20.4,[44.0,428.7,26.8,439.6]],[109,113,32.0,[44.0,428.7,12.1,430.4]],[110,111,16.4,[18.7,405.9,34.9,403.1]],[100,141,16.7,[35.4,374.9,48.0,386.0]],[100,173,49.0,[35.4,374.9,39.7,381.3,0.7,394.7]],[114,164,34.7,[326.4,149.8,343.2,152.0,358.1,161.6]],[112,144,16.7,[359.1,112.2,343.0,107.3]],[112,115,46.6,[359.1,112.2,357.7,94.5,354.6,85.3,356.2,66.2]],[112,121,18.8,[359.1,112.2,351.2,121.3,349.5,127.8]],[110,113,33.9,[18.7,405.9,10.2,423.1,5.7,422.6,12.1,430.4]],[17,139,67.9,[305.5,150.0,305.1,144.0,318.6,123.0,321.3,112.3,319.8,102.3,312.2,88.5]],[33,110,33.6,[51.6,410.7,36.9,411.0,18.7,405.9]],[99,140,17.1,[22.5,364.6,17.5,369.6,7.9,372.3]],[57,131,34.7,[29.0,498.2,47.5,496.3,57.0,497.7,62.5,494.3]],[113,119,23.8,[12.1,430.4,12.4,436.8,3.6,440.0,6.5,447.6]],[37,119,22.3,[17.1,466.6,11.5,461.1,6.5,447.6]],[37,57,50.1,[17.1,466.6,3.9,479.4,17.8,492.6,29.0,498.2]],[115,146,39.6,[356.2,66.2,353.1,53.7,356.8,46.4,354.0,40.6,355.1,36.6,351.2,33.8,351.1,30.7]],[117,119,21.9,[26.8,439.6,6.5,447.6]],[8,19,31.6,[120.8,215.8,95.1,226.9,93.1,229.9]],[146,165,30.5,[351.1,30.7,349.6,24.6,353.6,19.0,358.1,2.2]],[57,166,30.1,[29.0,498.2,15.4,495.1,1.5,487.0]],[38,45,36.7,[109.4,294.9,73.0,290.3]],[0,38,26.0,[135.2,298.1,109.4,294.9]],[14,38,23.9,[106.3,318.6,109.4,294.9]],[39,50,27.7,[210.7,285.9,238.3,283.5]],[39,47,21.3,[210.7,285.9,207.7,307.0]],[0,48,19.9,[135.2,298.1,155.0,300.5]],[0,44,21.3,[135.2,298.1,137.9,277.0]],[0,1,33.4,[135.2,298.1,112.2,273.9]],[18,74,30.1,[68.3,227.5,71.8,197.6]],[18,34,50.9,[68.3,227.5,59.2,218.5,44.7,216.4,31.4,211.1,23.0,214.8]],[40,137,22.0,[39.1,301.7,58.4,312.1]],[41,44,25.2,[162.9,280.3,137.9,277.0]],[41,49,34.6,[162.9,280.3,171.4,298.6,184.7,304.2]],[41,42,26.7,[162.9,280.3,188.7,273.5]],[114,121,33.6,[326.4,149.8,333.1,137.5,346.2,132.2,349.5,127.8]],[43,45,36.3,[89.7,260.0,86.9,276.5,73.0,290.3]],[0,14,35.5,[135.2,298.1,106.3,318.6]],[39,42,25.3,[210.7,285.9,188.7,273.5]],[123,149,31.2,[169.0,123.6,155.3,151.7]],[122,123,65.9,[145.2,74.9,155.5,88.7,178.1,104.9,169.0,123.6]],[70,127,22.8,[333.2,316.0,334.4,338.7]],[124,139,28.6,[325.5,112.0,322.3,97.0,312.2,88.5]],[124,144,18.1,[325.5,112.0,343.0,107.3]],[42,49,30.9,[188.7,273.5,184.7,304.2]],[48,49,29.9,[155.0,300.5,184.7,304.2]],[43,132,16.4,[89.7,260.0,76.1,269.1]],[125,135,50.3,[36.7,156.3,50.2,154.3,84.6,141.4]],[40,130,25.4,[39.1,301.7,14.0,305.9]],[1,38,21.2,[112.2,273.9,109.4,294.9]],[45,132,21.4,[73.0,290.3,76.1,269.1]],[72,171,24.1,[13.5,231.1,2.5,252.6]],[11,139,42.7,[292.6,50.6,312.2,88.5]],[126,143,43.0,[274.4,190.0,258.8,214.5,249.0,204.5]],[44,48,29.1,[137.9,277.0,155.0,300.5]],[46,126,33.1,[269.4,162.0,264.5,181.4,274.4,190.0]],[67,169,72.0,[337.2,454.4,331.2,479.4,324.1,525.1]],[34,71,42.5,[23.0,214.8,0.1,198.0,7.0,185.9]],[104,126,28.6,[251.3,188.2,259.2,180.8,274.4,190.0]],[116,127,16.9,[342.5,353.6,334.4,338.7]],[65,127,34.2,[302.8,330.3,326.1,341.0,334.4,338.7]],[50,55,29.2,[238.3,283.5,237.2,292.7,244.2,311.4]],[20,128,20.4,[128.4,138.1,127.7,158.5]],[68,128,32.6,[134.5,188.3,136.6,171.9,127.7,158.5]],[55,58,31.3,[244.2,311.4,225.5,309.3,221.2,321.0]],[30,52,54.9,[224.0,364.1,254.7,361.6,277.8,368.4]],[30,56,39.8,[224.0,364.1,243.1,349.4,244.3,345.5,242.1,334.0]],[51,56,32.8,[273.8,342.0,242.1,334.0]],[51,52,26.7,[273.8,342.0,277.8,368.4]],[51,54,19.7,[273.8,342.0,279.8,323.2]],[53,65,26.3,[308.8,352.8,312.1,342.3,302.8,330.3]],[52,53,34.6,[277.8,368.4,308.8,352.8]],[54,65,24.1,[279.8,323.2,302.8,330.3]],[3,54,33.3,[283.7,291.2,277.5,306.9,279.8,323.2]],[54,55,37.5,[279.8,323.2,244.2,311.4]],[53,116,34.0,[308.8,352.8,330.6,351.2,342.5,353.6]],[24,32,44.3,[270.6,391.3,247.9,383.9,227.8,387.3]],[114,144,46.7,[326.4,149.8,335.8,114.4,343.0,107.3]],[55,56,22.8,[244.2,311.4,242.1,334.0]],[3,50,49.1,[283.7,291.2,266.7,296.6,238.3,283.5]],[129,136,18.2,[76.7,174.9,78.4,161.2,77.0,157.0]],[50,150,18.3,[238.3,283.5,255.7,277.8]],[51,65,31.3,[273.8,342.0,302.8,330.3]],[4,65,26.3,[314.2,306.5,302.8,330.3]],[51,53,36.6,[273.8,342.0,308.8,352.8]],[3,150,31.1,[283.7,291.2,255.7,277.8]],[94,175,22.1,[37.5,273.5,26.8,278.5,17.9,273.2]],[40,94,36.4,[39.1,301.7,26.9,289.9,37.5,273.5]],[56,58,27.4,[242.1,334.0,228.4,332.6,221.2,321.0]],[9,132,19.2,[64.7,256.9,69.2,268.4,76.1,269.1]],[133,141,19.2,[64.0,393.6,52.6,392.1,48.0,386.0]],[89,133,39.4,[76.1,360.6,68.0,363.0,64.0,393.6]],[45,137,30.5,[73.0,290.3,66.0,301.5,60.2,300.8,58.4,312.1]],[2,57,16.4,[30.3,514.6,29.0,498.2]],[5,168,72.7,[99.2,67.0,81.5,40.0,67.4,13.0,68.9,3.1]],[47,58,19.4,[207.7,307.0,221.2,321.0]],[135,136,19.9,[84.6,141.4,84.9,147.1,76.5,153.3,77.0,157.0]],[58,101,31.6,[221.2,321.0,220.4,336.6,205.2,341.7]],[16,143,48.9,[240.2,248.1,239.4,243.4,254.1,221.3,249.0,204.5]],[16,138,25.4,[240.2,248.1,215.4,242.2]],[47,50,38.8,[207.7,307.0,225.0,291.3,238.3,283.5]],[137,147,23.2,[58.4,312.1,81.4,315.3]],[31,97,125.4,[232.0,413.5,238.1,435.9,238.5,451.4,236.3,466.6,214.9,531.6,212.1,530.9]],[30,58,43.2,[224.0,364.1,221.2,321.0]],[50,58,43.5,[238.3,283.5,227.6,291.6,221.2,321.0]],[59,64,28.5,[167.8,236.2,145.3,218.7]],[59,60,26.1,[167.8,236.2,193.6,239.4]],[110,141,58.8,[18.7,405.9,5.7,400.5,48.0,386.0]],[110,173,28.4,[18.7,405.9,4.6,408.3,0.7,394.7]],[151,171,29.8,[2.1,279.2,7.4,267.7,4.2,266.1,2.5,252.6]],[139,142,25.0,[312.2,88.5,320.1,91.3,329.5,87.0,333.7,82.3]],[13,172,32.1,[154.7,326.0,157.8,347.2,153.5,356.9]],[60,138,22.0,[193.6,239.4,215.4,242.2]],[60,61,26.9,[193.6,239.4,196.9,212.7]],[59,61,39.9,[167.8,236.2,174.4,222.2,196.9,212.7]],[59,145,34.3,[167.8,236.2,172.6,202.2]],[142,146,58.7,[333.7,82.3,331.5,66.9,334.8,56.7,334.6,48.8,351.1,30.7]],[142,144,31.1,[333.7,82.3,340.0,82.7,343.0,107.3]],[61,174,16.8,[196.9,212.7,198.4,195.9]],[62,143,25.1,[224.2,200.8,249.0,204.5]],[61,62,32.6,[196.9,212.7,211.1,213.7,224.2,200.8]],[61,145,27.4,[196.9,212.7,182.2,210.3,172.6,202.2]],[66,145,16.5,[160.4,191.2,172.6,202.2]],[128,149,29.8,[127.7,158.5,140.3,159.5,145.0,155.3,155.3,151.7]],[62,138,42.9,[224.2,200.8,217.2,216.8,215.4,242.2]],[61,138,43.3,[196.9,212.7,195.9,224.6,207.0,226.3,213.7,230.0,215.4,242.2]],[62,63,35.3,[224.2,200.8,223.0,191.1,200.8,178.6]],[64,66,34.0,[145.3,218.7,147.2,201.5,160.4,191.2]],[148,149,27.3,[181.0,160.8,155.3,151.7]],[66,148,36.7,[160.4,191.2,181.0,160.8]],[66,68,26.0,[160.4,191.2,134.5,188.3]],[69,150,27.3,[230.7,266.8,255.7,277.8]]],"stations":[{"n":80,"t":1,"s":1.42,"name":"서울대학교입구전철역"},{"n":39,"t":1,"s":1.55,"name":"관악구청"},{"n":77,"t":1,"s":1.39,"name":"KT관악지점"},{"n":68,"t":0,"s":1.23,"name":"신봉초등학교입구"},{"n":32,"t":2,"s":1.05,"name":"관악경찰서.관악소방서"},{"n":16,"t":1,"s":1.26,"name":"서울대입구역2호선"},{"n":58,"t":1,"s":1.37,"name":"관악구청"},{"n":92,"t":1,"s":1.21,"name":"생모리츠타운"},{"n":38,"t":1,"s":1.6,"name":"영락고교.영락의료과학고"},{"n":18,"t":0,"s":1.3,"name":"봉천역6번출구"},{"n":85,"t":0,"s":1.17,"name":"관악동부센트레빌아파트앞"},{"n":137,"t":2,"s":1.51,"name":"e편한세상서울대입구아파트"},{"n":4,"t":0,"s":1.35,"name":"낙성대동"},{"n":46,"t":1,"s":1.49,"name":"중앙동성당앞"},{"n":20,"t":1,"s":1.46,"name":"현대시장"},{"n":34,"t":1,"s":1.28,"name":"봉천역4번출구"},{"n":134,"t":2,"s":0.89,"name":"서울여상.문영여중고앞"},{"n":73,"t":1,"s":1.44,"name":"은천동벽산블루밍아파트105동"},{"n":103,"t":0,"s":1.07,"name":"쑥고개"},{"n":116,"t":1,"s":1.58,"name":"낙성대입구"},{"n":125,"t":0,"s":1.53,"name":"은천초등학교"},{"n":114,"t":1,"s":1.19,"name":"관악로입구"},{"n":111,"t":0,"s":0.94,"name":"삼양슈퍼"},{"n":122,"t":0,"s":1.33,"name":"성현동주민센터"},{"n":83,"t":0,"s":1.12,"name":"관악드림타운115동"},{"n":124,"t":1,"s":1.14,"name":"성현동동아아파트"},{"n":170,"t":0,"s":1.1,"name":"낙성대현대아파트"},{"n":67,"t":0,"s":0.82,"name":"낙성대공원, 관악복합평생교육센터"},{"n":11,"t":2,"s":1.03,"name":"동아아파트105동앞"},{"n":96,"t":2,"s":0.87,"name":"신림중.삼성고.관악아트홀·도서관"},{"n":97,"t":2,"s":0.8,"name":"서울대학교.치과병원.동물병원"},{"n":84,"t":2,"s":0.96,"name":"관악드림타운2단지"},{"n":7,"t":0,"s":1.01,"name":"벽산아파트"},{"n":57,"t":1,"s":0.91,"name":"서울산업정보학교.삼성교"},{"n":169,"t":2,"s":0.85,"name":"서울과학전시관"},{"n":146,"t":0,"s":0.98,"name":"청림동현대아파트"}]};
+const $=s=>document.querySelector(s),R=Math.random,cv=$('#c'),cx=cv.getContext('2d'),W=MAP.W,H=MAP.H;
+const COL=['#e5484d','#3e63dd','#30a46c','#f5a524'],CAP=12,SPD=50;
+const PH=[['아침',45,6,4],['낮',45,10,6],['저녁',60,16,5],['밤',30,21,3]],RN=['주거 → 일터·공공','','일터·공공 → 주거',''];
+// 시간대별 [생성 배율, [목적지 속성 가중치: 주거,일터,공공]] (출발 속성별)
+const F=[[[2.5,[0,.6,.4]],[.2,[0,0,1]],[.2,[1,0,0]]],[[.7,[0,.5,.5]],[.8,[.5,0,.5]],[.8,[.5,.5,0]]],[[.3,[0,.5,.5]],[2.5,[.85,0,.15]],[2.5,[.9,.1,0]]],[[.5,[0,.5,.5]],[.4,[1,0,0]],[.4,[1,0,0]]]];
+let N,st,L,adj,hc=new Map(),state,day,tm,score,spd,sel,ups,spare,mode,got,best=0,sc=1,ox=0,oy=0,dp=1,T={},lt=0,own=new Map(),xn=new Map(),dr=null,EG=new Map();
+try{best=+localStorage.getItem('bm')||0}catch(e){}
+const rt=()=>{const s=getComputedStyle(document.documentElement);['bg','ink','road','card'].forEach(k=>T[k]=s.getPropertyValue('--'+k).trim())};
+const ek=(a,b)=>Math.min(a,b)*1024+Math.max(a,b);
+// 도로망: 교차점(노드)과 도로 구간(곡선 좌표 포함). 구간 좌표는 번호가 작은 노드에서 큰 노드 방향
+function mk(){N=MAP.nodes.map(([x,y])=>({x,y,n:[]}));EG=new Map();
+ MAP.edges.forEach(([a,b,len,g])=>{const pts=[];for(let i=0;i<g.length;i+=2)pts.push([g[i],g[i+1]]);N[a].n.push([b,len]);N[b].n.push([a,len]);EG.set(ek(a,b),{a,b,pts})})}
+const epts=(u,v)=>{const e=EG.get(ek(u,v));return u<v?e.pts:e.pts.slice().reverse()};
+// 정류장은 실제 버스정류장, 처음 5개는 주거·일터·공공을 모두 포함, 이후는 하루마다 1개씩 개방
+function openSt(){const i=st.length,m=MAP.stations[i];if(!m)return;
+ st.push({id:i,node:m.n,a:m.t,s:m.s,name:m.name||'',w:[],cap:10,g:0});buildAdj()}
+function buildAdj(){adj=st.map(()=>new Set());L.forEach(l=>{const S=l.stops;for(let k=1;k<S.length;k++){adj[S[k-1]].add(S[k]);adj[S[k]].add(S[k-1])}});hc.clear()}
+// 승객은 목적지 속성까지 노선망을 따라 환승하며 이동: 다음 정거장 계산
+function hop(s,t){const key=s*9+t;if(hc.has(key))return hc.get(key);let r=null;const q=[[s,null]],seen=new Set([s]);
+ while(q.length){const[u,f]=q.shift();if(u!=s&&st[u].a==t){r=f;break}adj[u].forEach(v=>{if(!seen.has(v)){seen.add(v);q.push([v,f??v])}})}
+ hc.set(key,r);return r}
+const addBus=l=>{const b={l,d:l.len&&l.buses.length?(l.buses[0].d+l.len/2)%l.len:0,k:0,dw:0,p:[]};l.buses.push(b);fix(b)};
+// 노선 = seq(도로 교차점 순서, 드래그로 그린 그대로) + stops(정류장 id 순서)
+function addLine(){const l={stops:[],seq:[],buses:[],fwd:[],pts:[],cum:[],marks:[],vst:[],len:0};addBus(l);L.push(l)}
+// 왕복 경로: 앞으로 가는 길 + 같은 도로를 되돌아오는 길
+function rebuild(l){const S=l.seq,n=S.length;l.fwd=[];l.pts=[];l.cum=[];l.marks=[];l.vst=[];l.len=0;
+ if(n>=2&&l.stops.length>=2){
+  const P=[[N[S[0]].x,N[S[0]].y]],C=[0],at=[0];let d=0;
+  for(let k=1;k<n;k++){const g=epts(S[k-1],S[k]);for(let q=1;q<g.length;q++){d+=Math.hypot(g[q][0]-g[q-1][0],g[q][1]-g[q-1][1]);P.push(g[q]);C.push(d)}at.push(d)}
+  const tot=d,m=l.stops.length,sp=l.stops.map(id=>S.indexOf(st[id].node));
+  l.fwd=P;l.pts=P.concat(P.slice(0,-1).reverse());l.cum=C.concat(C.slice(0,-1).reverse().map(c=>2*tot-c));
+  for(let k=0;k<m;k++){l.marks.push(at[sp[k]]);l.vst.push(k)}
+  for(let k=m-2;k>=1;k--){l.marks.push(2*tot-at[sp[k]]);l.vst.push(k)}
+  l.len=2*tot}
+ l.buses.forEach(fix);buildAdj();calcEdges()}
+function fix(b){const l=b.l;if(l.stops.length<2||!l.len){b.d=0;b.k=0;return}b.d=Math.min(b.d,l.len);const m=l.marks.length;let k=1;while(k<m&&l.marks[k]<b.d-.01)k++;b.k=k%m}
+function pos(l,d){const c=l.cum,P=l.pts;let i=1;while(i<c.length-1&&c[i]<d)i++;const a=P[i-1],b=P[i],t=(d-c[i-1])/(c[i]-c[i-1]||1);return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t]}
+function arrive(b){const l=b.l,i=l.vst[b.k],s=st[l.stops[i]];
+ if(b.k==0)b.d=0;b.k=(b.k+1)%l.marks.length;
+ const nx=l.stops[l.vst[b.k]];b.dw=.7;
+ b.p=b.p.filter(p=>{if(p.t==s.a){score++;return false}if(hop(s.id,p.t)==nx)return true;s.w.push(p);return false});
+ for(let j=0;j<s.w.length&&b.p.length<CAP;){const p=s.w[j];if(hop(s.id,p.t)==nx){b.p.push(p);s.w.splice(j,1)}else j++}}
+function stepBus(b,dt){const l=b.l;if(l.stops.length<2||!l.len)return;if(b.dw>0){b.dw-=dt;return}
+ b.d+=SPD*dt;const t=b.k?l.marks[b.k]:l.len;if(b.d>=t){b.d=t;arrive(b)}}
+// 도로 구간은 노선 하나만 쓸 수 있음 → 같은 도로 위 겹침이 생기지 않음
+function calcEdges(){own=new Map();xn=new Map();
+ L.forEach((l,li)=>{const S=l.seq;for(let k=1;k<S.length;k++)own.set(ek(S[k-1],S[k]),li);
+  new Set(S).forEach(n=>{if(!xn.has(n))xn.set(n,new Set());xn.get(n).add(li)})})}
+function ph(){let a=0,i=0;while(i<3&&tm>=a+PH[i][1]){a+=PH[i][1];i++}return[i,a]}
+function spawn(d){const i=ph()[0],g=1+.12*(day-1);
+ st.forEach(s=>{const[f,w]=F[i][s.a],v=w.map((x,k)=>st.some(z=>z.a==k)?x:0),tot=v[0]+v[1]+v[2];
+  if(!tot||R()>.05*s.s*g*f*d)return;let r=R()*tot,t=0;while(t<2&&r>=v[t]){r-=v[t];t++}s.w.push({t})})}
+// 정류장 대기 인원이 상한을 넘으면 게이지가 차고, 가득 차면 게임오버
+function gauges(d){st.forEach(s=>{s.g=s.w.length>s.cap?s.g+d/20:Math.max(0,s.g-d/40);if(s.g>=1)over()})}
+function over(){if(state!='play')return;state='over';best=Math.max(best,score);try{localStorage.setItem('bm',best)}catch(e){}ui()}
+function endDay(){day++;tm=0;openSt();got=false;state='plan';ui()}
+function newGame(){mk();st=[];L=[];dr=null;addLine();for(let i=0;i<5;i++)openSt();day=1;tm=0;score=0;spd=1;sel=0;ups=0;spare=0;mode=0;got=false;state='plan';calcEdges();ui()}
+function hud(){const[i,a]=ph(),f=(tm-a)/PH[i][1],h=PH[i][2]+f*PH[i][3],j=(i+1)%4,left=Math.ceil(a+PH[i][1]-tm);
+ $('#h1').textContent=`${day}일차 ${String(h|0).padStart(2,'0')}:${String((h%1)*60|0).padStart(2,'0')} ${PH[i][0]}${RN[i]?' 러시':''} · 수송 ${score}명`;
+ $('#h2').textContent=(RN[i]?RN[i]+' · ':'')+(i==3?`${left}초 뒤 정비 시간`:`${left}초 뒤 ${PH[j][0]}${RN[j]?' 러시('+RN[j]+')':''}`)}
+function ui(){const p=$('#panel');hud();$('#sp').textContent='배속 ×'+spd;
+ if(state=='play')p.style.display='none';
+ else{p.style.display='block';
+  if(state=='over')p.innerHTML=`<b>정류장 과밀, 게임오버</b><div class="m">${day}일차 · 수송 ${score}명 · 최고 ${best}명</div><button data-a="r">다시 시작</button>`;
+  else{const o=[0,2].concat(L.length<4?[1]:[]),nm=['버스 +1','정류장 증설','노선 +1'];
+   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다.</div>`)+
+   (day>1?(got?'':o.map(k=>`<button data-a="g${k}">${nm[k]}</button>`).join('')):'')+
+   (day>1?`<div class="m">${day}일차 아침: ${RN[0]} 러시</div><button data-a="go" ${got?'':'disabled'}>${day}일차 출발</button>`:'')}}
+ $('#bar').innerHTML=L.map((l,i)=>`<button data-a="l${i}" class="${i==sel&&!mode?'on':''}" style="background:${COL[i]};color:#fff">${i+1}</button>`).join('')+
+  `<button data-a="b">버스 + (${spare})</button><button data-a="u" class="${mode?'on':''}">증설 (${ups})</button>`}
+document.addEventListener('click',e=>{const a=e.target.dataset&&e.target.dataset.a;if(!a)return;
+ if(a=='r')newGame();else if(a=='go')state='play';else if(a=='s')spd=spd==1?2:1;
+ else if(a=='b'){if(spare>0&&L[sel].stops.length>1){addBus(L[sel]);spare--}}
+ else if(a=='u'){if(ups>0)mode=mode?0:1}
+ else if(a[0]=='l'){sel=+a.slice(1);mode=0}
+ else if(a[0]=='g'&&!got){const k=+a[1];if(k==0)spare++;else if(k==1){addLine();sel=L.length-1}else ups++;got=true}
+ ui()});
+// 정류장 탭: 증설 모드면 증설, 아니면 노선 끝 구간 지우기
+function tap(s){if(state=='over')return;
+ if(mode){if(ups>0&&s.cap<22){s.cap+=4;ups--;if(!ups)mode=0}return}
+ const l=L[sel],m=l.stops.length;if(!m)return;
+ if(l.stops[m-1]==s.id){
+  if(m==1){l.seq=[];l.stops=[]}else{const pi=l.seq.indexOf(st[l.stops[m-2]].node);l.seq=l.seq.slice(0,pi+1);l.stops.pop()}
+ }else if(l.stops[0]==s.id){
+  if(m==1){l.seq=[];l.stops=[]}else{const ni=l.seq.indexOf(st[l.stops[1]].node);l.seq=l.seq.slice(ni);l.stops.shift()}
+ }else return;
+ rebuild(l);fin(l)}
+function fin(l){if(state=='plan'&&day==1&&l.stops.length>1)state='play'}
+const pt=e=>{const r=cv.getBoundingClientRect();return[(e.clientX-r.left-ox)/sc,(e.clientY-r.top-oy)/sc]};
+const nearStop=(x,y)=>{let b=null,bd=22/sc;st.forEach(s=>{const n=N[s.node],d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=s}});return b};
+const nearNode=(x,y)=>{let b=-1,bd=14/sc;N.forEach((n,i)=>{const d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=i}});return b};
+const stopIds=ns=>ns.map(nd=>st.find(s=>s.node==nd)).filter(Boolean).map(s=>s.id);
+// 손가락이 교차점을 건너뛰면, 아직 쓰지 않은 도로를 따라 가장 가까운 길(최대 4칸)로 이어 줌
+function bridge(from,to,D,l,maxh){
+ const blocked=new Set(D);l.seq.forEach(v=>blocked.add(v));blocked.delete(from);
+ const prev=new Map([[from,null]]);let fr=[from];
+ for(let h=0;h<maxh&&fr.length;h++){const nx=[];
+  for(const u of fr)for(const[v]of N[u].n){
+   if(prev.has(v)||blocked.has(v)||own.has(ek(u,v)))continue;
+   prev.set(v,u);
+   if(v==to){const r=[];for(let c=v;c!=from;c=prev.get(c))r.unshift(c);return r}
+   nx.push(v)}
+  fr=nx}
+ return null}
+cv.addEventListener('pointerdown',e=>{if(state=='over')return;const[x,y]=pt(e),s=nearStop(x,y);if(!s)return;
+ if(mode){tap(s);ui();return}
+ const l=L[sel],n=l.stops.length;
+ if(!n||l.stops[n-1]==s.id)dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false};
+ else if(l.stops[0]==s.id)dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:true,rev:false};
+ else dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false,mid:s.id};
+ cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',e=>{if(!dr)return;const[x,y]=pt(e);dr.x=x;dr.y=y;
+ if(!dr.m&&Math.hypot(x-dr.sx,y-dr.sy)>10)dr.m=1;
+ if(!dr.m||dr.mid!==undefined)return;
+ const l=L[dr.li];
+ if(dr.first&&!dr.rev){l.seq.reverse();l.stops.reverse();dr.rev=true;rebuild(l)}
+ const t=nearNode(x,y);if(t<0)return;
+ const D=dr.D,last=D[D.length-1];
+ if(t==last)return;
+ if(D.length>1&&t==D[D.length-2]){D.pop();return}
+ if(D.includes(t)||l.seq.includes(t))return;
+ const p=bridge(last,t,D,l,4);if(p)p.forEach(v=>D.push(v))});
+cv.addEventListener('pointerup',e=>{if(!dr)return;const d=dr;dr=null;if(state=='over')return;
+ const l=L[d.li];
+ // 노선 중간 정류장을 끌어내면 그 정류장만 취소 (도로는 그대로 남음)
+ if(d.mid!==undefined){if(d.m){l.stops=l.stops.filter(id=>id!=d.mid);rebuild(l);fin(l)}ui();return}
+ if(!d.m){const[x,y]=pt(e),s=nearStop(x,y);if(s)tap(s);ui();return}
+ const D=d.D,last=D[D.length-1],endStop=st.find(s=>s.node==last);
+ if(D.length>=2&&endStop){
+  if(!l.seq.length){l.seq=D.slice();l.stops=stopIds(D)}
+  else{l.seq=l.seq.concat(D.slice(1));l.stops=l.stops.concat(stopIds(D.slice(1)))}
+  rebuild(l);fin(l)
+ }else if(d.rev){l.seq.reverse();l.stops.reverse();rebuild(l)}
+ ui()});
+cv.addEventListener('pointercancel',()=>{if(dr&&dr.rev){const l=L[dr.li];l.seq.reverse();l.stops.reverse();rebuild(l)}dr=null;ui()});
+function shp(x,y,a,r,fill,stroke,lw){cx.beginPath();if(a==0)cx.arc(x,y,r,0,7);else if(a==1)cx.rect(x-r,y-r,2*r,2*r);
+ else{cx.moveTo(x,y-r*1.15);cx.lineTo(x+r*1.05,y+r*.8);cx.lineTo(x-r*1.05,y+r*.8);cx.closePath()}
+ if(fill){cx.fillStyle=fill;cx.fill()}if(stroke){cx.lineWidth=lw;cx.strokeStyle=stroke;cx.stroke()}}
+function trace(pts){cx.beginPath();pts.forEach((p,k)=>k?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]))}
+function draw(){const w=cv.width/dp,h=cv.height/dp;cx.setTransform(dp,0,0,dp,0,0);cx.fillStyle=T.bg;cx.fillRect(0,0,w,h);
+ cx.translate(ox,oy);cx.scale(sc,sc);cx.lineCap='round';cx.lineJoin='round';
+ // 도로망
+ cx.strokeStyle=T.road;cx.lineWidth=3;EG.forEach(e=>{trace(e.pts);cx.stroke()});
+ // 노선 (구간이 겹치지 않으므로 그대로 그림)
+ L.forEach((l,li)=>{if(l.fwd.length<2)return;cx.strokeStyle=COL[li];cx.lineWidth=4.5;trace(l.fwd);cx.stroke()});
+ // 교차점 표시 (여러 노선이 지나는 도로 교차점)
+ xn.forEach((ls,nd)=>{if(ls.size>1){const q=N[nd];cx.beginPath();cx.arc(q.x,q.y,4.2,0,7);cx.fillStyle=T.bg;cx.fill();cx.strokeStyle=T.ink;cx.lineWidth=1.6;cx.stroke()}});
+ // 드래그 중 미리보기
+ if(dr&&dr.m&&dr.D.length){const D=dr.D,pts=[[N[D[0]].x,N[D[0]].y]];for(let k=1;k<D.length;k++)epts(D[k-1],D[k]).slice(1).forEach(p=>pts.push(p));pts.push([dr.x,dr.y]);
+  cx.setLineDash([6,5]);cx.strokeStyle=COL[dr.li];cx.lineWidth=3.5;trace(pts);cx.stroke();cx.setLineDash([])}
+ // 정류장
+ st.forEach(s=>{const n=N[s.node],r=8+s.s*2.5;shp(n.x,n.y,s.a,r,T.card,T.ink,3);
+  if(s.g>0){cx.beginPath();cx.arc(n.x,n.y,r+7,-1.57,-1.57+6.28*Math.min(1,s.g));cx.strokeStyle='#e5484d';cx.lineWidth=3;cx.stroke()}
+  s.w.forEach((p,i)=>shp(n.x+r+6+(i%5)*7,n.y-r+(i/5|0)*7,p.t,2.8,i>=s.cap?'#e5484d':T.ink))});
+ // 정류장 이름
+ cx.font='8px system-ui,"Noto Sans KR",sans-serif';cx.textAlign='center';cx.textBaseline='top';
+ st.forEach(s=>{if(!s.name)return;const n=N[s.node],r=8+s.s*2.5,nm=s.name.length>8?s.name.slice(0,7)+'…':s.name;
+  cx.lineWidth=3;cx.strokeStyle=T.bg;cx.strokeText(nm,n.x,n.y+r+3);cx.fillStyle=T.ink;cx.fillText(nm,n.x,n.y+r+3)});
+ // 버스
+ L.forEach((l,li)=>l.stops.length>1&&l.len&&l.buses.forEach(b=>{const[x,y]=pos(l,b.d);cx.fillStyle=COL[li];cx.fillRect(x-9,y-6,18,12);
+  cx.fillStyle='#fff';cx.font='bold 9px system-ui';cx.textAlign='center';cx.textBaseline='middle';cx.fillText(b.p.length,x,y+.5)}))}
+function size(){const r=$('#w').getBoundingClientRect();dp=devicePixelRatio||1;cv.width=r.width*dp;cv.height=r.height*dp;
+ cv.style.width=r.width+'px';cv.style.height=r.height+'px';sc=Math.min(r.width/W,r.height/H);ox=(r.width-W*sc)/2;oy=(r.height-H*sc)/2}
+function loop(now){const dt=Math.min(.05,(now-lt)/1000);lt=now;
+ if(state=='play'){const d=dt*spd;tm+=d;spawn(d);L.forEach(l=>l.buses.forEach(b=>stepBus(b,d)));gauges(d);if(state=='play'&&tm>=180)endDay();if(state=='play')hud()}
+ draw();requestAnimationFrame(loop)}
+addEventListener('resize',size);matchMedia('(prefers-color-scheme:dark)').addEventListener('change',rt);
+rt();newGame();size();requestAnimationFrame(t=>{lt=t;loop(t)});
 </script></body></html>
