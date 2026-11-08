@@ -5,66 +5,101 @@
 <style>
 body{font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:16px;background:#f2f3f0;color:#1f2328}
 h3{margin:0 0 12px}
-button{font:inherit;padding:10px 16px;border:0;border-radius:10px;background:#1f2328;color:#fff;font-weight:600}
+button{font:inherit;padding:10px 16px;border:0;border-radius:10px;background:#1f2328;color:#fff;font-weight:600;margin-right:6px}
+button:disabled{opacity:.4}
+button.sub{background:#fff;color:#1f2328}
 pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:12px}
 </style></head><body>
-<h3>봉선동 지도 데이터 연결 테스트 (진단)</h3>
-<button id="go">다시 실행</button>
+<h3>봉선동 지도 데이터 연결 테스트</h3>
+<button id="go">다시 실행</button><button id="clr" class="sub">저장값 지우기</button>
 <pre id="log">대기 중</pre>
 <script>
-const L=document.getElementById('log');
+const L=document.getElementById('log'),B=document.getElementById('go');
 const say=t=>{L.textContent+=(L.textContent?'\n':'')+t};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const SERVERS=[
  'https://overpass-api.de/api/interpreter',
- 'https://overpass.kumi.systems/api/interpreter',
  'https://lz4.overpass-api.de/api/interpreter',
- 'https://z.overpass-api.de/api/interpreter'
+ 'https://z.overpass-api.de/api/interpreter',
+ 'https://overpass.kumi.systems/api/interpreter',
+ 'https://overpass.private.coffee/api/interpreter'
 ];
-async function ov(url,ql,ms){
- const c=new AbortController(),t=setTimeout(()=>c.abort(),ms||30000);
+const KEY_BB='osm:bongseon:bb:v1',KEY_PREF='osm:pref:v1';
+const lget=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
+const lset=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let pref=+lget(KEY_PREF)||0;
+
+function short(e){
+ if(!e)return '알 수 없음';
+ if(e.name==='AbortError')return '시간 초과';
+ const m=String(e.message||e);
+ if(/^HTTP (429|502|503|504)/.test(m))return '서버 혼잡 ('+m.slice(0,8).trim()+')';
+ if(e.name==='TypeError')return '연결 안 됨 ('+m.slice(0,30)+')';
+ return m.slice(0,90);
+}
+async function once(url,ql,ms){
+ const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);
  try{
   const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:c.signal});
-  if(!r.ok){const tx=(await r.text()).replace(/\s+/g,' ').slice(0,140);throw new Error('HTTP '+r.status+' '+tx)}
+  if(!r.ok){const tx=(await r.text()).replace(/\s+/g,' ').slice(0,100);throw new Error('HTTP '+r.status+' '+tx)}
   return await r.json();
  }finally{clearTimeout(t)}
 }
-const errText=e=>(e&&e.name==='AbortError')?'시간 초과':((e&&e.name)||'Error')+': '+((e&&e.message)||e);
-async function run(){
- L.textContent='';
- say('브라우저: '+navigator.userAgent.slice(0,90));
- say('\n1. 서버별 연결 확인 (아주 작은 요청)');
- let ok=null;
- for(const s of SERVERS){
-  const t0=performance.now();
-  try{
-   await ov(s,'[out:json][timeout:10];node(1);out;',15000);
-   say(`   ✅ ${s}  (${Math.round(performance.now()-t0)}ms)`);
-   if(!ok) ok=s;
-  }catch(e){
-   say(`   ❌ ${s}\n      → ${errText(e)}`);
+// 서버를 돌아가며 시도하고, 전부 바쁘면 잠시 기다렸다가 다시 시도 (최대 3바퀴)
+async function ovAny(ql){
+ const n=SERVERS.length;let last;
+ for(let round=0;round<3;round++){
+  for(let k=0;k<n;k++){
+   const i=(pref+k)%n,host=SERVERS[i].replace('https://','').split('/')[0];
+   try{
+    const t0=performance.now();
+    const j=await once(SERVERS[i],ql,25000);
+    say(`   ✅ ${host} (${Math.round(performance.now()-t0)}ms)`);
+    pref=i;lset(KEY_PREF,i);
+    return j;
+   }catch(e){last=e;say(`   ✖ ${host}: ${short(e)}`)}
   }
+  if(round<2){const w=3*(round+1);say(`   …모두 안 됨. ${w}초 뒤 다시 시도 (${round+2}/3)`);await sleep(w*1000)}
  }
- if(!ok){
-  say('\n모든 서버에서 실패했어요. 위 에러 문구를 그대로 알려 주세요.');
-  return;
+ throw last||new Error('모든 서버 실패');
+}
+// 봉선동 범위 찾기: 행정경계(봉선동/봉선1동/봉선2동)를 합치고, 없으면 지명 위치 주변으로
+async function findBox(){
+ const j=await ovAny('[out:json][timeout:25];rel["name"~"^봉선[0-9]?동$"]["boundary"="administrative"](34.9,126.5,35.4,127.3);out bounds;');
+ const els=(j.elements||[]).filter(e=>e.bounds);
+ if(els.length){
+  const bb={S:Math.min(...els.map(e=>e.bounds.minlat)),W:Math.min(...els.map(e=>e.bounds.minlon)),N:Math.max(...els.map(e=>e.bounds.maxlat)),E:Math.max(...els.map(e=>e.bounds.maxlon))};
+  say(`   행정경계 ${els.length}개를 합쳤어요`);
+  return bb;
  }
- say('\n2. 봉선동 경계 찾기 ('+ok.replace('https://','').split('/')[0]+')');
+ say('   행정경계가 없어서 지명 위치로 대체해요');
+ const j2=await ovAny('[out:json][timeout:25];nwr["name"~"^봉선"]["place"](34.9,126.5,35.4,127.3);out center;');
+ const p=(j2.elements||[]).map(e=>e.center||(e.lat!=null?{lat:e.lat,lon:e.lon}:null)).find(Boolean);
+ if(!p)throw new Error('봉선동을 찾지 못함');
+ const d=0.012;
+ return{S:p.lat-d,W:p.lon-d,N:p.lat+d,E:p.lon+d};
+}
+async function run(){
+ L.textContent='';B.disabled=true;
  try{
-  const j1=await ov(ok,'[out:json][timeout:25];rel["name"="봉선동"]["boundary"="administrative"](34.9,126.5,35.4,127.3);out bounds;',30000);
-  const b=(j1.elements||[]).find(e=>e.bounds);
-  if(!b) throw new Error('봉선동 경계를 찾지 못함 (검색 결과 '+(j1.elements||[]).length+'개)');
-  const{minlat:S,minlon:W,maxlat:N,maxlon:E}=b.bounds;
-  say(`   범위: 위도 ${S.toFixed(4)}~${N.toFixed(4)}, 경도 ${W.toFixed(4)}~${E.toFixed(4)}`);
-  say('\n3. 도로·건물·버스정류장 요청');
-  const j2=await ov(ok,`[out:json][timeout:30];(way["highway"](${S},${W},${N},${E});way["building"](${S},${W},${N},${E});node["highway"="bus_stop"](${S},${W},${N},${E}););out tags center;`,45000);
-  let roads=0,bld=0,stops=0;
-  j2.elements.forEach(e=>{const t=e.tags||{};if(t.highway==='bus_stop')stops++;else if(t.highway)roads++;else if(t.building)bld++});
-  say(`   도로 ${roads}개 / 건물 ${bld}개 / 버스정류장 ${stops}개`);
+  say('1. 봉선동 범위');
+  let bb=lget(KEY_BB);
+  if(bb){say('   저장된 범위를 사용해요')}
+  else{bb=await findBox();lset(KEY_BB,bb)}
+  say(`   위도 ${bb.S.toFixed(4)}~${bb.N.toFixed(4)}, 경도 ${bb.W.toFixed(4)}~${bb.E.toFixed(4)}`);
+  say('\n2. 도로·건물·버스정류장 개수 (개수만 세는 가벼운 요청)');
+  const box=`(${bb.S},${bb.W},${bb.N},${bb.E})`;
+  const j=await ovAny(`[out:json][timeout:30];way["highway"]${box}->.r;way["building"]${box}->.b;node["highway"="bus_stop"]${box}->.s;.r out count;.b out count;.s out count;`);
+  const c=(j.elements||[]).filter(e=>e.type==='count').map(e=>+(e.tags&&e.tags.total)||0);
+  if(c.length<3)throw new Error('개수 응답이 이상해요');
+  say(`   도로 ${c[0]}개 / 건물 ${c[1]}개 / 버스정류장 ${c[2]}개`);
   say('\n✅ 지도 데이터 받기 성공');
  }catch(e){
-  say('   ❌ '+errText(e));
- }
+  say('\n❌ 실패: '+short(e));
+  say('서버가 바쁜 시간대일 수 있어요. 몇 분 뒤 "다시 실행"을 눌러 보세요.');
+ }finally{B.disabled=false}
 }
-document.getElementById('go').onclick=run;
+B.onclick=run;
+document.getElementById('clr').onclick=()=>{try{localStorage.removeItem(KEY_BB);localStorage.removeItem(KEY_PREF)}catch(e){}pref=0;say('\n저장값을 지웠어요.')};
 run();
 </script></body></html>
