@@ -30,7 +30,7 @@ const COL=['#e5484d','#3e63dd','#30a46c','#f5a524'],CAP=12,SPD=50;
 const PH=[['아침',45,6,4],['낮',45,10,6],['저녁',60,16,5],['밤',30,21,3]],RN=['주거 → 일터·공공','','일터·공공 → 주거',''];
 // 시간대별 [생성 배율, [목적지 속성 가중치: 주거,일터,공공]] (출발 속성별)
 const F=[[[2.5,[0,.6,.4]],[.2,[0,0,1]],[.2,[1,0,0]]],[[.7,[0,.5,.5]],[.8,[.5,0,.5]],[.8,[.5,.5,0]]],[[.3,[0,.5,.5]],[2.5,[.85,0,.15]],[2.5,[.9,.1,0]]],[[.5,[0,.5,.5]],[.4,[1,0,0]],[.4,[1,0,0]]]];
-let N,st,L,adj,hc=new Map(),state,day,tm,score,spd,sel,ups,spare,mode,got,best=0,sc=1,ox=0,oy=0,dp=1,T={},lt=0,own=new Map(),xn=new Map(),dr=null,EG=new Map();
+let N,st,L,adj,hc=new Map(),state,day,tm,score,spd,sel,ups,spare,mode,got,best=0,sc=1,sc0=1,zm=1,ptrs=new Map(),pan=null,pinch=null,nextOpen=-1,msg='',msgT=0,ox=0,oy=0,dp=1,T={},lt=0,own=new Map(),xn=new Map(),dr=null,EG=new Map();
 try{best=+localStorage.getItem('bm')||0}catch(e){}
 const rt=()=>{const s=getComputedStyle(document.documentElement);['bg','ink','road','card'].forEach(k=>T[k]=s.getPropertyValue('--'+k).trim())};
 const ek=(a,b)=>Math.min(a,b)*1024+Math.max(a,b);
@@ -38,7 +38,7 @@ const ek=(a,b)=>Math.min(a,b)*1024+Math.max(a,b);
 function mk(){N=MAP.nodes.map(([x,y])=>({x,y,n:[]}));EG=new Map();
  MAP.edges.forEach(([a,b,len,g])=>{const pts=[];for(let i=0;i<g.length;i+=2)pts.push([g[i],g[i+1]]);N[a].n.push([b,len]);N[b].n.push([a,len]);EG.set(ek(a,b),{a,b,pts})})}
 const epts=(u,v)=>{const e=EG.get(ek(u,v));return u<v?e.pts:e.pts.slice().reverse()};
-// 정류장은 실제 버스정류장, 처음 5개는 주거·일터·공공을 모두 포함, 이후는 하루마다 1개씩 개방
+// 정류장은 실제 버스정류장, 처음 5개는 주거·일터·공공을 모두 포함, 이후는 매일 낮 시간대에 1개씩 저절로 생김
 function openSt(){const i=st.length,m=MAP.stations[i];if(!m)return;
  st.push({id:i,node:m.n,a:m.t,s:m.s,name:m.name||'',w:[],cap:10,g:0});buildAdj()}
 function buildAdj(){adj=st.map(()=>new Set());L.forEach(l=>{const S=l.stops;for(let k=1;k<S.length;k++){adj[S[k-1]].add(S[k]);adj[S[k]].add(S[k-1])}});hc.clear()}
@@ -80,21 +80,21 @@ function spawn(d){const i=ph()[0],g=1+.12*(day-1);
 // 정류장 대기 인원이 상한을 넘으면 게이지가 차고, 가득 차면 게임오버
 function gauges(d){st.forEach(s=>{s.g=s.w.length>s.cap?s.g+d/20:Math.max(0,s.g-d/40);if(s.g>=1)over()})}
 function over(){if(state!='play')return;state='over';best=Math.max(best,score);try{localStorage.setItem('bm',best)}catch(e){}ui()}
-function endDay(){day++;tm=0;openSt();got=false;state='plan';ui()}
-function newGame(){mk();st=[];L=[];dr=null;addLine();for(let i=0;i<5;i++)openSt();day=1;tm=0;score=0;spd=1;sel=0;ups=0;spare=0;mode=0;got=false;state='plan';calcEdges();ui()}
+function endDay(){day++;tm=0;nextOpen=52+R()*30;got=false;state='plan';ui()}
+function newGame(){mk();st=[];L=[];dr=null;addLine();for(let i=0;i<5;i++)openSt();nextOpen=52+R()*30;zm=1;sc=sc0;day=1;tm=0;score=0;spd=1;sel=0;ups=0;spare=0;mode=0;got=false;state='plan';calcEdges();ui()}
 function hud(){const[i,a]=ph(),f=(tm-a)/PH[i][1],h=PH[i][2]+f*PH[i][3],j=(i+1)%4,left=Math.ceil(a+PH[i][1]-tm);
  $('#h1').textContent=`${day}일차 ${String(h|0).padStart(2,'0')}:${String((h%1)*60|0).padStart(2,'0')} ${PH[i][0]}${RN[i]?' 러시':''} · 수송 ${score}명`;
- $('#h2').textContent=(RN[i]?RN[i]+' · ':'')+(i==3?`${left}초 뒤 정비 시간`:`${left}초 뒤 ${PH[j][0]}${RN[j]?' 러시('+RN[j]+')':''}`)}
+ $('#h2').textContent=msgT>0?msg:(RN[i]?RN[i]+' · ':'')+(i==3?`${left}초 뒤 정비 시간`:`${left}초 뒤 ${PH[j][0]}${RN[j]?' 러시('+RN[j]+')':''}`)}
 function ui(){const p=$('#panel');hud();$('#sp').textContent='배속 ×'+spd;
  if(state=='play')p.style.display='none';
  else{p.style.display='block';
   if(state=='over')p.innerHTML=`<b>정류장 과밀, 게임오버</b><div class="m">${day}일차 · 수송 ${score}명 · 최고 ${best}명</div><button data-a="r">다시 시작</button>`;
-  else{const o=[0,2].concat(L.length<4?[1]:[]),nm=['버스 +1','정류장 증설','노선 +1'];
-   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다.</div>`)+
+  else{const o=[0].concat(L.length<4?[1]:[],[2]),nm=['버스 +1','노선 +1','대기 공간 +4'];
+   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 두 손가락으로 지도를 확대·이동할 수 있어요(확대 상태에서 끌면 가장자리에서 지도가 따라 움직여요). 낮에는 새 정류장이 저절로 생겨요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다. 낮에 새 정류장이 하나 생겨요.</div>`)+
    (day>1?(got?'':o.map(k=>`<button data-a="g${k}">${nm[k]}</button>`).join('')):'')+
    (day>1?`<div class="m">${day}일차 아침: ${RN[0]} 러시</div><button data-a="go" ${got?'':'disabled'}>${day}일차 출발</button>`:'')}}
  $('#bar').innerHTML=L.map((l,i)=>`<button data-a="l${i}" class="${i==sel&&!mode?'on':''}" style="background:${COL[i]};color:#fff">${i+1}</button>`).join('')+
-  `<button data-a="b">버스 + (${spare})</button><button data-a="u" class="${mode?'on':''}">증설 (${ups})</button>`}
+  `<button data-a="b">버스 + (${spare})</button><button data-a="u" class="${mode?'on':''}">대기공간 (${ups})</button>`}
 document.addEventListener('click',e=>{const a=e.target.dataset&&e.target.dataset.a;if(!a)return;
  if(a=='r')newGame();else if(a=='go')state='play';else if(a=='s')spd=spd==1?2:1;
  else if(a=='b'){if(spare>0&&L[sel].stops.length>1){addBus(L[sel]);spare--}}
@@ -114,8 +114,8 @@ function tap(s){if(state=='over')return;
  rebuild(l);fin(l)}
 function fin(l){if(state=='plan'&&day==1&&l.stops.length>1)state='play'}
 const pt=e=>{const r=cv.getBoundingClientRect();return[(e.clientX-r.left-ox)/sc,(e.clientY-r.top-oy)/sc]};
-const nearStop=(x,y)=>{let b=null,bd=22/sc;st.forEach(s=>{const n=N[s.node],d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=s}});return b};
-const nearNode=(x,y)=>{let b=-1,bd=14/sc;N.forEach((n,i)=>{const d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=i}});return b};
+const nearStop=(x,y)=>{let b=null,bd=26/sc;st.forEach(s=>{const n=N[s.node],d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=s}});return b};
+const nearNode=(x,y)=>{let b=-1,bd=20/sc;N.forEach((n,i)=>{const d=Math.hypot(n.x-x,n.y-y);if(d<bd){bd=d;b=i}});return b};
 const stopIds=ns=>ns.map(nd=>st.find(s=>s.node==nd)).filter(Boolean).map(s=>s.id);
 // 손가락이 교차점을 건너뛰면, 아직 쓰지 않은 도로를 따라 가장 가까운 길(최대 4칸)로 이어 줌
 function bridge(from,to,D,l,maxh){
@@ -129,15 +129,13 @@ function bridge(from,to,D,l,maxh){
    nx.push(v)}
   fr=nx}
  return null}
-cv.addEventListener('pointerdown',e=>{if(state=='over')return;const[x,y]=pt(e),s=nearStop(x,y);if(!s)return;
- if(mode){tap(s);ui();return}
- const l=L[sel],n=l.stops.length;
- if(!n||l.stops[n-1]==s.id)dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false};
- else if(l.stops[0]==s.id)dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:true,rev:false};
- else dr={li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false,mid:s.id};
- cv.setPointerCapture(e.pointerId)});
-cv.addEventListener('pointermove',e=>{if(!dr)return;const[x,y]=pt(e);dr.x=x;dr.y=y;
- if(!dr.m&&Math.hypot(x-dr.sx,y-dr.sy)>10)dr.m=1;
+const lp=e=>{const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top]};
+function clampView(){const r=cv.getBoundingClientRect(),mw=W*sc,mh=H*sc;
+ ox=mw<=r.width?(r.width-mw)/2:Math.min(0,Math.max(r.width-mw,ox));oy=mh<=r.height?(r.height-mh)/2:Math.min(0,Math.max(r.height-mh,oy))}
+function zoomAt(f,px,py){const nz=Math.min(4,Math.max(1,zm*f));if(nz==zm)return;const wx=(px-ox)/sc,wy=(py-oy)/sc;zm=nz;sc=sc0*zm;ox=px-wx*sc;oy=py-wy*sc;clampView()}
+function cancelDrag(){if(dr&&dr.rev){const l=L[dr.li];l.seq.reverse();l.stops.reverse();rebuild(l)}dr=null}
+function dragTo(x,y){dr.x=x;dr.y=y;
+ if(!dr.m&&Math.hypot(x-dr.sx,y-dr.sy)>8/sc)dr.m=1;
  if(!dr.m||dr.mid!==undefined)return;
  const l=L[dr.li];
  if(dr.first&&!dr.rev){l.seq.reverse();l.stops.reverse();dr.rev=true;rebuild(l)}
@@ -146,8 +144,28 @@ cv.addEventListener('pointermove',e=>{if(!dr)return;const[x,y]=pt(e);dr.x=x;dr.y
  if(t==last)return;
  if(D.length>1&&t==D[D.length-2]){D.pop();return}
  if(D.includes(t)||l.seq.includes(t))return;
- const p=bridge(last,t,D,l,4);if(p)p.forEach(v=>D.push(v))});
-cv.addEventListener('pointerup',e=>{if(!dr)return;const d=dr;dr=null;if(state=='over')return;
+ const p=bridge(last,t,D,l,6);if(p)p.forEach(v=>D.push(v))}
+cv.addEventListener('pointerdown',e=>{ptrs.set(e.pointerId,lp(e));cv.setPointerCapture(e.pointerId);
+ if(ptrs.size==2){cancelDrag();pan=null;const[a,b]=[...ptrs.values()];pinch={d:Math.hypot(a[0]-b[0],a[1]-b[1])||1,mx:(a[0]+b[0])/2,my:(a[1]+b[1])/2};ui();return}
+ if(ptrs.size>2||pinch)return;
+ const[x,y]=pt(e),s=nearStop(x,y);
+ if(!s){pan={id:e.pointerId,x:e.clientX,y:e.clientY};return}
+ if(state=='over')return;
+ if(mode){tap(s);ui();return}
+ const l=L[sel],n=l.stops.length,cp=lp(e);
+ if(!n||l.stops[n-1]==s.id)dr={id:e.pointerId,li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false,cp};
+ else if(l.stops[0]==s.id)dr={id:e.pointerId,li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:true,rev:false,cp};
+ else dr={id:e.pointerId,li:sel,D:[s.node],x,y,sx:x,sy:y,m:0,first:false,rev:false,mid:s.id,cp}});
+cv.addEventListener('pointermove',e=>{if(!ptrs.has(e.pointerId))return;ptrs.set(e.pointerId,lp(e));
+ if(pinch){if(ptrs.size<2)return;const[a,b]=[...ptrs.values()],d=Math.hypot(a[0]-b[0],a[1]-b[1])||1,mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2;
+  zoomAt(d/pinch.d,pinch.mx,pinch.my);ox+=mx-pinch.mx;oy+=my-pinch.my;clampView();pinch={d,mx,my};return}
+ if(pan&&pan.id==e.pointerId){ox+=e.clientX-pan.x;oy+=e.clientY-pan.y;pan.x=e.clientX;pan.y=e.clientY;clampView();return}
+ if(!dr||dr.id!=e.pointerId)return;dr.cp=lp(e);const[x,y]=pt(e);dragTo(x,y)});
+cv.addEventListener('wheel',e=>{e.preventDefault();const[x,y]=lp(e);zoomAt(e.deltaY<0?1.2:1/1.2,x,y)},{passive:false});
+cv.addEventListener('pointerup',e=>{ptrs.delete(e.pointerId);
+ if(pan&&pan.id==e.pointerId)pan=null;
+ if(pinch){if(ptrs.size<2)pinch=ptrs.size?pinch:null;if(!ptrs.size)pinch=null;return}
+ if(!dr||dr.id!=e.pointerId)return;const d=dr;dr=null;if(state=='over')return;
  const l=L[d.li];
  // 노선 중간 정류장을 끌어내면 그 정류장만 취소 (도로는 그대로 남음)
  if(d.mid!==undefined){if(d.m){l.stops=l.stops.filter(id=>id!=d.mid);rebuild(l);fin(l)}ui();return}
@@ -159,37 +177,38 @@ cv.addEventListener('pointerup',e=>{if(!dr)return;const d=dr;dr=null;if(state=='
   rebuild(l);fin(l)
  }else if(d.rev){l.seq.reverse();l.stops.reverse();rebuild(l)}
  ui()});
-cv.addEventListener('pointercancel',()=>{if(dr&&dr.rev){const l=L[dr.li];l.seq.reverse();l.stops.reverse();rebuild(l)}dr=null;ui()});
+cv.addEventListener('pointercancel',e=>{ptrs.delete(e.pointerId);if(pan&&pan.id==e.pointerId)pan=null;if(!ptrs.size)pinch=null;if(dr&&dr.id==e.pointerId){cancelDrag();ui()}});
 function shp(x,y,a,r,fill,stroke,lw){cx.beginPath();if(a==0)cx.arc(x,y,r,0,7);else if(a==1)cx.rect(x-r,y-r,2*r,2*r);
  else{cx.moveTo(x,y-r*1.15);cx.lineTo(x+r*1.05,y+r*.8);cx.lineTo(x-r*1.05,y+r*.8);cx.closePath()}
  if(fill){cx.fillStyle=fill;cx.fill()}if(stroke){cx.lineWidth=lw;cx.strokeStyle=stroke;cx.stroke()}}
 function trace(pts){cx.beginPath();pts.forEach((p,k)=>k?cx.lineTo(p[0],p[1]):cx.moveTo(p[0],p[1]))}
-function draw(){const w=cv.width/dp,h=cv.height/dp;cx.setTransform(dp,0,0,dp,0,0);cx.fillStyle=T.bg;cx.fillRect(0,0,w,h);
+function draw(){const w=cv.width/dp,h=cv.height/dp,k=Math.sqrt(zm)/zm,now=performance.now();cx.setTransform(dp,0,0,dp,0,0);cx.fillStyle=T.bg;cx.fillRect(0,0,w,h);
  cx.translate(ox,oy);cx.scale(sc,sc);cx.lineCap='round';cx.lineJoin='round';
- // 도로망
- cx.strokeStyle=T.road;cx.lineWidth=3;EG.forEach(e=>{trace(e.pts);cx.stroke()});
- // 노선 (구간이 겹치지 않으므로 그대로 그림)
- L.forEach((l,li)=>{if(l.fwd.length<2)return;cx.strokeStyle=COL[li];cx.lineWidth=4.5;trace(l.fwd);cx.stroke()});
- // 교차점 표시 (여러 노선이 지나는 도로 교차점)
- xn.forEach((ls,nd)=>{if(ls.size>1){const q=N[nd];cx.beginPath();cx.arc(q.x,q.y,4.2,0,7);cx.fillStyle=T.bg;cx.fill();cx.strokeStyle=T.ink;cx.lineWidth=1.6;cx.stroke()}});
- // 드래그 중 미리보기
- if(dr&&dr.m&&dr.D.length){const D=dr.D,pts=[[N[D[0]].x,N[D[0]].y]];for(let k=1;k<D.length;k++)epts(D[k-1],D[k]).slice(1).forEach(p=>pts.push(p));pts.push([dr.x,dr.y]);
-  cx.setLineDash([6,5]);cx.strokeStyle=COL[dr.li];cx.lineWidth=3.5;trace(pts);cx.stroke();cx.setLineDash([])}
- // 정류장
- st.forEach(s=>{const n=N[s.node],r=8+s.s*2.5;shp(n.x,n.y,s.a,r,T.card,T.ink,3);
-  if(s.g>0){cx.beginPath();cx.arc(n.x,n.y,r+7,-1.57,-1.57+6.28*Math.min(1,s.g));cx.strokeStyle='#e5484d';cx.lineWidth=3;cx.stroke()}
-  s.w.forEach((p,i)=>shp(n.x+r+6+(i%5)*7,n.y-r+(i/5|0)*7,p.t,2.8,i>=s.cap?'#e5484d':T.ink))});
- // 정류장 이름
- cx.font='8px system-ui,"Noto Sans KR",sans-serif';cx.textAlign='center';cx.textBaseline='top';
- st.forEach(s=>{if(!s.name)return;const n=N[s.node],r=8+s.s*2.5,nm=s.name.length>8?s.name.slice(0,7)+'…':s.name;
-  cx.lineWidth=3;cx.strokeStyle=T.bg;cx.strokeText(nm,n.x,n.y+r+3);cx.fillStyle=T.ink;cx.fillText(nm,n.x,n.y+r+3)});
- // 버스
- L.forEach((l,li)=>l.stops.length>1&&l.len&&l.buses.forEach(b=>{const[x,y]=pos(l,b.d);cx.fillStyle=COL[li];cx.fillRect(x-9,y-6,18,12);
-  cx.fillStyle='#fff';cx.font='bold 9px system-ui';cx.textAlign='center';cx.textBaseline='middle';cx.fillText(b.p.length,x,y+.5)}))}
+ // 도로망 (확대해도 선·아이콘이 지도만큼 커지지 않게 k로 보정)
+ cx.strokeStyle=T.road;cx.lineWidth=2.4*k;EG.forEach(e=>{trace(e.pts);cx.stroke()});
+ L.forEach((l,li)=>{if(l.fwd.length<2)return;cx.strokeStyle=COL[li];cx.lineWidth=4*k;trace(l.fwd);cx.stroke()});
+ xn.forEach((ls,nd)=>{if(ls.size>1){const q=N[nd];cx.beginPath();cx.arc(q.x,q.y,3.6*k,0,7);cx.fillStyle=T.bg;cx.fill();cx.strokeStyle=T.ink;cx.lineWidth=1.4*k;cx.stroke()}});
+ if(dr&&dr.m&&dr.D.length){const D=dr.D,pts=[[N[D[0]].x,N[D[0]].y]];for(let q=1;q<D.length;q++)epts(D[q-1],D[q]).slice(1).forEach(p=>pts.push(p));pts.push([dr.x,dr.y]);
+  cx.setLineDash([6*k,5*k]);cx.strokeStyle=COL[dr.li];cx.lineWidth=3*k;trace(pts);cx.stroke();cx.setLineDash([]);
+  const e=N[D[D.length-1]];cx.beginPath();cx.arc(e.x,e.y,5*k,0,7);cx.strokeStyle=COL[dr.li];cx.lineWidth=2*k;cx.stroke()}
+ st.forEach(s=>{const n=N[s.node],r=(5+s.s*2)*k;shp(n.x,n.y,s.a,r,T.card,T.ink,2.4*k);
+  if(s.g>0){cx.beginPath();cx.arc(n.x,n.y,r+5*k,-1.57,-1.57+6.28*Math.min(1,s.g));cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke()}
+  if(s.born){const a=now-s.born;if(a<3000){cx.globalAlpha=1-a/3000;cx.beginPath();cx.arc(n.x,n.y,r+a/3000*34*k,0,7);cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke();cx.globalAlpha=1}}
+  s.w.forEach((p,i)=>shp(n.x+r+5*k+(i%5)*5.5*k,n.y-r+(i/5|0)*5.5*k,p.t,2.2*k,i>=s.cap?'#e5484d':T.ink))});
+ cx.font=(7.5*k)+'px system-ui,"Noto Sans KR",sans-serif';cx.textAlign='center';cx.textBaseline='top';
+ st.forEach(s=>{if(!s.name||(zm<1.3&&s.s<1.3))return;const n=N[s.node],r=(5+s.s*2)*k,nm=s.name.length>8?s.name.slice(0,7)+'…':s.name;
+  cx.lineWidth=3*k;cx.strokeStyle=T.bg;cx.strokeText(nm,n.x,n.y+r+2*k);cx.fillStyle=T.ink;cx.fillText(nm,n.x,n.y+r+2*k)});
+ L.forEach((l,li)=>l.stops.length>1&&l.len&&l.buses.forEach(b=>{const[x,y]=pos(l,b.d);cx.fillStyle=COL[li];cx.fillRect(x-7.5*k,y-5*k,15*k,10*k);
+  cx.fillStyle='#fff';cx.font='bold '+(8*k)+'px system-ui';cx.textAlign='center';cx.textBaseline='middle';cx.fillText(b.p.length,x,y+.5*k)}))}
 function size(){const r=$('#w').getBoundingClientRect();dp=devicePixelRatio||1;cv.width=r.width*dp;cv.height=r.height*dp;
- cv.style.width=r.width+'px';cv.style.height=r.height+'px';sc=Math.min(r.width/W,r.height/H);ox=(r.width-W*sc)/2;oy=(r.height-H*sc)/2}
-function loop(now){const dt=Math.min(.05,(now-lt)/1000);lt=now;
- if(state=='play'){const d=dt*spd;tm+=d;spawn(d);L.forEach(l=>l.buses.forEach(b=>stepBus(b,d)));gauges(d);if(state=='play'&&tm>=180)endDay();if(state=='play')hud()}
+ cv.style.width=r.width+'px';cv.style.height=r.height+'px';sc0=Math.min(r.width/W,r.height/H);sc=sc0*zm;clampView()}
+function popSt(){if(st.length>=MAP.stations.length)return;openSt();const s=st[st.length-1];s.born=performance.now();msg='새 정류장이 생겼어요: '+(s.name||'이름 없음');msgT=5}
+function loop(now){const dt=Math.min(.05,(now-lt)/1000);lt=now;if(msgT>0)msgT-=dt;
+ // 확대 상태에서 손가락을 화면 가장자리로 가져가면 지도가 따라 움직임
+ if(dr&&dr.m&&dr.cp&&zm>1.05){const r=cv.getBoundingClientRect(),M=44,px=dr.cp[0],py=dr.cp[1],vx=px<M?1:px>r.width-M?-1:0,vy=py<M?1:py>r.height-M?-1:0;
+  if(vx||vy){ox+=vx*240*dt;oy+=vy*240*dt;clampView();dragTo((px-ox)/sc,(py-oy)/sc)}}
+ if(state=='play'){const d=dt*spd;tm+=d;if(nextOpen>0&&tm>=nextOpen){nextOpen=-1;popSt()}
+  spawn(d);L.forEach(l=>l.buses.forEach(b=>stepBus(b,d)));gauges(d);if(state=='play'&&tm>=180)endDay();if(state=='play')hud()}
  draw();requestAnimationFrame(loop)}
 addEventListener('resize',size);matchMedia('(prefers-color-scheme:dark)').addEventListener('change',rt);
 rt();newGame();size();requestAnimationFrame(t=>{lt=t;loop(t)});
