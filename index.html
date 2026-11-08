@@ -11,8 +11,8 @@ button.sub{background:#fff;color:#1f2328}
 pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:12px}
 </style></head><body>
 <h3>봉선동 지도 데이터 연결 테스트</h3>
-<button id="go">다시 실행</button><button id="clr" class="sub">저장값 지우기</button>
-<pre id="log">대기 중</pre>
+<button id="go">실행</button><button id="clr" class="sub">저장값 지우기</button>
+<pre id="log">버튼을 눌러 한 번만 실행하세요. 서버가 바쁠 땐 연달아 누르지 말고 30초 이상 기다려 주세요.</pre>
 <script>
 const L=document.getElementById('log'),B=document.getElementById('go');
 const say=t=>{L.textContent+=(L.textContent?'\n':'')+t};
@@ -48,7 +48,7 @@ async function once(url,ql,ms){
 // 서버를 돌아가며 시도하고, 전부 바쁘면 잠시 기다렸다가 다시 시도 (최대 3바퀴)
 async function ovAny(ql){
  const n=SERVERS.length;let last;
- for(let round=0;round<3;round++){
+ for(let round=0;round<1;round++){
   for(let k=0;k<n;k++){
    const i=(pref+k)%n,host=SERVERS[i].replace('https://','').split('/')[0];
    try{
@@ -101,5 +101,4 @@ async function run(){
 }
 B.onclick=run;
 document.getElementById('clr').onclick=()=>{try{localStorage.removeItem(KEY_BB);localStorage.removeItem(KEY_PREF)}catch(e){}pref=0;say('\n저장값을 지웠어요.')};
-run();
 </script></body></html>
