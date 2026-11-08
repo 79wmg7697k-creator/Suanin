@@ -90,7 +90,7 @@ function ui(){const p=$('#panel');hud();$('#sp').textContent='배속 ×'+spd;
  else{p.style.display='block';
   if(state=='over')p.innerHTML=`<b>정류장 과밀, 게임오버</b><div class="m">${day}일차 · 수송 ${score}명 · 최고 ${best}명</div><button data-a="r">다시 시작</button>`;
   else{const o=[0].concat(L.length<4?[1]:[],[2]),nm=['버스 +1','노선 +1','대기 공간 +4'];
-   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 두 손가락으로 지도를 확대·이동할 수 있어요(확대 상태에서 끌면 가장자리에서 지도가 따라 움직여요). 낮에는 새 정류장이 저절로 생겨요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다. 낮에 새 정류장이 하나 생겨요.</div>`)+
+   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 두 손가락으로 지도를 확대·이동할 수 있어요(확대 상태에서 끌면 가장자리에서 지도가 따라 움직여요). 낮에는 새 정류장이 저절로 생겨요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 노선 끝 정류장에서 노선을 따라 거꾸로 끌면 노선이 줄어들고, 중간 정류장을 옆으로 끌어내면 그 정류장에만 서지 않아요. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다. 낮에 새 정류장이 하나 생겨요.</div>`)+
    (day>1?(got?'':o.map(k=>`<button data-a="g${k}">${nm[k]}</button>`).join('')):'')+
    (day>1?`<div class="m">${day}일차 아침: ${RN[0]} 러시</div><button data-a="go" ${got?'':'disabled'}>${day}일차 출발</button>`:'')}}
  $('#bar').innerHTML=L.map((l,i)=>`<button data-a="l${i}" class="${i==sel&&!mode?'on':''}" style="background:${COL[i]};color:#fff">${i+1}</button>`).join('')+
@@ -143,6 +143,7 @@ function dragTo(x,y){dr.x=x;dr.y=y;
  const D=dr.D,last=D[D.length-1];
  if(t==last)return;
  if(D.length>1&&t==D[D.length-2]){D.pop();return}
+ if(D.length==1&&l.seq.includes(t)){const i=l.seq.indexOf(t);l.seq=l.seq.slice(0,i+1);const sn=new Set(l.seq);l.stops=l.stops.filter(id=>sn.has(st[id].node));D[0]=t;rebuild(l);return}
  if(D.includes(t)||l.seq.includes(t))return;
  const p=bridge(last,t,D,l,6);if(p)p.forEach(v=>D.push(v))}
 cv.addEventListener('pointerdown',e=>{ptrs.set(e.pointerId,lp(e));cv.setPointerCapture(e.pointerId);
@@ -168,14 +169,14 @@ cv.addEventListener('pointerup',e=>{ptrs.delete(e.pointerId);
  if(!dr||dr.id!=e.pointerId)return;const d=dr;dr=null;if(state=='over')return;
  const l=L[d.li];
  // 노선 중간 정류장을 끌어내면 그 정류장만 취소 (도로는 그대로 남음)
- if(d.mid!==undefined){if(d.m){l.stops=l.stops.filter(id=>id!=d.mid);rebuild(l);fin(l)}ui();return}
+ if(d.mid!==undefined){if(d.m){l.stops=l.stops.filter(id=>id!=d.mid);rebuild(l);fin(l);msg=(st[d.mid].name||'정류장')+' 정차 취소 (노선은 그대로 지나가요)';msgT=3}ui();return}
  if(!d.m){const[x,y]=pt(e),s=nearStop(x,y);if(s)tap(s);ui();return}
  const D=d.D,last=D[D.length-1],endStop=st.find(s=>s.node==last);
  if(D.length>=2&&endStop){
   if(!l.seq.length){l.seq=D.slice();l.stops=stopIds(D)}
   else{l.seq=l.seq.concat(D.slice(1));l.stops=l.stops.concat(stopIds(D.slice(1)))}
   rebuild(l);fin(l)
- }else if(d.rev){l.seq.reverse();l.stops.reverse();rebuild(l)}
+ }else{const ls=l.stops.length?st[l.stops[l.stops.length-1]].node:null;if(ls!=null){const i=l.seq.lastIndexOf(ls);if(i>=0&&i<l.seq.length-1)l.seq=l.seq.slice(0,i+1)}if(d.rev){l.seq.reverse();l.stops.reverse()}rebuild(l)}
  ui()});
 cv.addEventListener('pointercancel',e=>{ptrs.delete(e.pointerId);if(pan&&pan.id==e.pointerId)pan=null;if(!ptrs.size)pinch=null;if(dr&&dr.id==e.pointerId){cancelDrag();ui()}});
 function shp(x,y,a,r,fill,stroke,lw){cx.beginPath();if(a==0)cx.arc(x,y,r,0,7);else if(a==1)cx.rect(x-r,y-r,2*r,2*r);
@@ -191,7 +192,9 @@ function draw(){const w=cv.width/dp,h=cv.height/dp,k=Math.sqrt(zm)/zm,now=perfor
  if(dr&&dr.m&&dr.D.length){const D=dr.D,pts=[[N[D[0]].x,N[D[0]].y]];for(let q=1;q<D.length;q++)epts(D[q-1],D[q]).slice(1).forEach(p=>pts.push(p));pts.push([dr.x,dr.y]);
   cx.setLineDash([6*k,5*k]);cx.strokeStyle=COL[dr.li];cx.lineWidth=3*k;trace(pts);cx.stroke();cx.setLineDash([]);
   const e=N[D[D.length-1]];cx.beginPath();cx.arc(e.x,e.y,5*k,0,7);cx.strokeStyle=COL[dr.li];cx.lineWidth=2*k;cx.stroke()}
- st.forEach(s=>{const n=N[s.node],r=(5+s.s*2)*k;shp(n.x,n.y,s.a,r,T.card,T.ink,2.4*k);
+ if(dr&&dr.m&&dr.mid!==undefined){const a=N[st[dr.mid].node];cx.setLineDash([4*k,4*k]);cx.strokeStyle='#e5484d';cx.lineWidth=2*k;cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(dr.x,dr.y);cx.stroke();cx.setLineDash([]);
+  cx.font='bold '+(14*k)+'px system-ui';cx.fillStyle='#e5484d';cx.textAlign='center';cx.textBaseline='middle';cx.fillText('✕',dr.x,dr.y)}
+ st.forEach(s=>{const n=N[s.node],r=(5+s.s*2)*k;L.forEach((l,li)=>{if(l.stops.includes(s.id)){cx.beginPath();cx.arc(n.x,n.y,r+3.4*k,0,7);cx.strokeStyle=COL[li];cx.lineWidth=2*k;cx.stroke()}});shp(n.x,n.y,s.a,r,T.card,T.ink,2.4*k);
   if(s.g>0){cx.beginPath();cx.arc(n.x,n.y,r+5*k,-1.57,-1.57+6.28*Math.min(1,s.g));cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke()}
   if(s.born){const a=now-s.born;if(a<3000){cx.globalAlpha=1-a/3000;cx.beginPath();cx.arc(n.x,n.y,r+a/3000*34*k,0,7);cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke();cx.globalAlpha=1}}
   s.w.forEach((p,i)=>shp(n.x+r+5*k+(i%5)*5.5*k,n.y-r+(i/5|0)*5.5*k,p.t,2.2*k,i>=s.cap?'#e5484d':T.ink))});
