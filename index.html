@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>지도 데이터 연결 테스트</title>
+<style>
+body{font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:16px;background:#f2f3f0;color:#1f2328}
+h3{margin:0 0 12px}
+button{font:inherit;padding:10px 16px;border:0;border-radius:10px;background:#1f2328;color:#fff;font-weight:600}
+pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:12px}
+</style></head><body>
+<h3>봉선동 지도 데이터 연결 테스트</h3>
+<button id="go">테스트 실행</button>
+<pre id="log">대기 중</pre>
+<script>
+const L=document.getElementById('log');
+const say=t=>{L.textContent+='\n'+t};
+const OV='https://overpass-api.de/api/interpreter';
+async function ov(ql){
+ const r=await fetch(OV,{method:'POST',body:'data='+encodeURIComponent(ql),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+ if(!r.ok) throw new Error('Overpass 응답 '+r.status);
+ return r.json();
+}
+async function run(){
+ L.textContent='';
+ try{
+  say('1. 봉선동 경계 찾기 (Overpass, 광주광역시 안에서 검색)...');
+  const j1=await ov('[out:json][timeout:25];area["name"="광주광역시"]->.g;rel(area.g)["name"="봉선동"];out bounds;');
+  const b=(j1.elements||[]).find(e=>e.bounds);
+  if(!b) throw new Error('봉선동 경계를 찾지 못함 (검색 결과 '+(j1.elements||[]).length+'개)');
+  const{minlat:S,minlon:W,maxlat:N,maxlon:E}=b.bounds;
+  say(`   경계 범위: 위도 ${S.toFixed(4)}~${N.toFixed(4)}, 경도 ${W.toFixed(4)}~${E.toFixed(4)}`);
+  say('2. 도로·건물·버스정류장 요청 (Overpass)...');
+  const j2=await ov(`[out:json][timeout:25];(way["highway"](${S},${W},${N},${E});way["building"](${S},${W},${N},${E});node["highway"="bus_stop"](${S},${W},${N},${E}););out tags center;`);
+  let roads=0,bld=0,stops=0;
+  j2.elements.forEach(e=>{const t=e.tags||{};if(t.highway==='bus_stop')stops++;else if(t.highway)roads++;else if(t.building)bld++});
+  say(`   도로 ${roads}개 / 건물 ${bld}개 / 버스정류장 ${stops}개`);
+  say('\n✅ 외부 지도 데이터 연결 성공');
+ }catch(err){
+  say('\n❌ 실패: '+err.message);
+  say('(이 페이지에서 외부 요청이 막혀 있을 수 있어요)');
+ }
+}
+document.getElementById('go').onclick=run;
+run();
+</script></body></html>
