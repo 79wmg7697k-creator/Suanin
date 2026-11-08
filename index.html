@@ -8,7 +8,7 @@
 :root[data-theme="dark"]{--bg:#16181b;--ink:#ecedee;--road:#30343a;--card:#24272b;--mut:#9a9fa6}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Noto Sans KR",sans-serif;display:flex;flex-direction:column;overflow:hidden;user-select:none;-webkit-user-select:none}
-#hud{padding:8px 14px 2px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px}#sp{margin:0;background:var(--card)}#h2{font-weight:400;color:var(--mut);font-size:12px}
+#hud{padding:8px 14px 2px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px}#sp,#pz{margin:0 0 0 6px;background:var(--card);padding:10px 12px}#h2{font-weight:400;color:var(--mut);font-size:12px}
 #w{flex:1;position:relative;min-height:0;overflow:hidden}
 canvas{position:absolute;left:0;top:0;touch-action:none}
 #panel{display:none;position:absolute;left:8px;right:8px;top:6px;background:var(--card);border-radius:14px;padding:10px 12px;box-shadow:0 2px 14px #0004;pointer-events:none;opacity:.96}
@@ -19,7 +19,7 @@ button{border:0;border-radius:10px;padding:10px 14px;min-width:44px;font:inherit
 button.on{outline:3px solid var(--ink)}button:disabled{opacity:.4}
 .m{color:var(--mut);font-size:12px;margin-top:2px}
 </style></head><body>
-<div id="hud"><div><div id="h1"></div><div id="h2"></div></div><button id="sp" data-a="s"></button></div>
+<div id="hud"><div><div id="h1"></div><div id="h2"></div></div><div><button id="pz" data-a="p"></button><button id="sp" data-a="s"></button></div></div>
 <div id="w"><canvas id="c"></canvas><div id="panel"></div></div>
 <div id="bar"></div>
 <script>
@@ -30,7 +30,7 @@ const COL=['#e5484d','#3e63dd','#30a46c','#f5a524'],CAP=12,SPD=50;
 const PH=[['아침',45,6,4],['낮',45,10,6],['저녁',60,16,5],['밤',30,21,3]],RN=['주거 → 일터·공공','','일터·공공 → 주거',''];
 // 시간대별 [생성 배율, [목적지 속성 가중치: 주거,일터,공공]] (출발 속성별)
 const F=[[[2.5,[0,.6,.4]],[.2,[0,0,1]],[.2,[1,0,0]]],[[.7,[0,.5,.5]],[.8,[.5,0,.5]],[.8,[.5,.5,0]]],[[.3,[0,.5,.5]],[2.5,[.85,0,.15]],[2.5,[.9,.1,0]]],[[.5,[0,.5,.5]],[.4,[1,0,0]],[.4,[1,0,0]]]];
-let N,st,L,adj,hc=new Map(),state,day,tm,score,spd,sel,ups,spare,mode,got,best=0,sc=1,sc0=1,zm=1,ptrs=new Map(),pan=null,pinch=null,nextOpen=-1,msg='',msgT=0,ox=0,oy=0,dp=1,T={},lt=0,own=new Map(),xn=new Map(),dr=null,EG=new Map();
+let N,st,L,adj,hc=new Map(),state,day,tm,score,spd,sel,ups,spare,mode,got,best=0,sc=1,sc0=1,zm=1,paused=false,opens=[],ptrs=new Map(),pan=null,pinch=null,nextOpen=-1,msg='',msgT=0,ox=0,oy=0,dp=1,T={},lt=0,own=new Map(),xn=new Map(),dr=null,EG=new Map();
 try{best=+localStorage.getItem('bm')||0}catch(e){}
 const rt=()=>{const s=getComputedStyle(document.documentElement);['bg','ink','road','card'].forEach(k=>T[k]=s.getPropertyValue('--'+k).trim())};
 const ek=(a,b)=>Math.min(a,b)*1024+Math.max(a,b);
@@ -80,23 +80,23 @@ function spawn(d){const i=ph()[0],g=1+.12*(day-1);
 // 정류장 대기 인원이 상한을 넘으면 게이지가 차고, 가득 차면 게임오버
 function gauges(d){st.forEach(s=>{s.g=s.w.length>s.cap?s.g+d/20:Math.max(0,s.g-d/40);if(s.g>=1)over()})}
 function over(){if(state!='play')return;state='over';best=Math.max(best,score);try{localStorage.setItem('bm',best)}catch(e){}ui()}
-function endDay(){day++;tm=0;nextOpen=52+R()*30;got=false;state='plan';ui()}
-function newGame(){mk();st=[];L=[];dr=null;addLine();for(let i=0;i<5;i++)openSt();nextOpen=52+R()*30;zm=1;sc=sc0;day=1;tm=0;score=0;spd=1;sel=0;ups=0;spare=0;mode=0;got=false;state='plan';calcEdges();ui()}
+function endDay(){day++;tm=0;planOpens();got=false;state='plan';ui()}
+function newGame(){mk();st=[];L=[];dr=null;addLine();addLine();for(let i=0;i<5;i++)openSt();planOpens();paused=false;zm=1;sc=sc0;day=1;tm=0;score=0;spd=1;sel=0;ups=0;spare=0;mode=0;got=false;state='plan';calcEdges();ui()}
 function hud(){const[i,a]=ph(),f=(tm-a)/PH[i][1],h=PH[i][2]+f*PH[i][3],j=(i+1)%4,left=Math.ceil(a+PH[i][1]-tm);
  $('#h1').textContent=`${day}일차 ${String(h|0).padStart(2,'0')}:${String((h%1)*60|0).padStart(2,'0')} ${PH[i][0]}${RN[i]?' 러시':''} · 수송 ${score}명`;
- $('#h2').textContent=msgT>0?msg:(RN[i]?RN[i]+' · ':'')+(i==3?`${left}초 뒤 정비 시간`:`${left}초 뒤 ${PH[j][0]}${RN[j]?' 러시('+RN[j]+')':''}`)}
-function ui(){const p=$('#panel');hud();$('#sp').textContent='배속 ×'+spd;
+ $('#h2').textContent=paused&&state=='play'?'일시정지 중 · 노선을 수정할 수 있어요':msgT>0?msg:(RN[i]?RN[i]+' · ':'')+(i==3?`${left}초 뒤 정비 시간`:`${left}초 뒤 ${PH[j][0]}${RN[j]?' 러시('+RN[j]+')':''}`)}
+function ui(){const p=$('#panel');hud();$('#sp').textContent='배속 ×'+spd;$('#pz').textContent=paused&&state=='play'?'▶ 재개':'⏸ 정지';
  if(state=='play')p.style.display='none';
  else{p.style.display='block';
   if(state=='over')p.innerHTML=`<b>정류장 과밀, 게임오버</b><div class="m">${day}일차 · 수송 ${score}명 · 최고 ${best}명</div><button data-a="r">다시 시작</button>`;
   else{const o=[0].concat(L.length<4?[1]:[],[2]),nm=['버스 +1','노선 +1','대기 공간 +4'];
-   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 두 손가락으로 지도를 확대·이동할 수 있어요(확대 상태에서 끌면 가장자리에서 지도가 따라 움직여요). 낮에는 새 정류장이 저절로 생겨요. 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 노선 끝 정류장에서 노선을 따라 거꾸로 끌면 노선이 줄어들고, 중간 정류장을 옆으로 끌어내면 그 정류장에만 서지 않아요. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다. 낮에 새 정류장이 하나 생겨요.</div>`)+
+   p.innerHTML=(day==1?`<b>${MAP.name}</b><div class="m">정류장에서 손가락을 끌어 도로를 따라 다른 정류장까지 그려 노선을 만드세요. 정류장 2개를 이으면 게임이 시작돼요. 두 손가락으로 지도를 확대·이동할 수 있어요(확대 상태에서 끌면 가장자리에서 지도가 따라 움직여요). 정류장은 하루 중 아무 때나 저절로 생겨요(한 번에 여러 개도). 손가락이 빨리 지나가도 가까운 교차점은 도로를 따라 자동으로 이어집니다. 노선 끝 정류장에서 노선을 따라 거꾸로 끌면 노선이 줄어들고, 중간 정류장을 옆으로 끌어내면 그 정류장에만 서지 않아요. 노선 중간의 도로 지점을 끌어 다른 정류장에 놓으면 그 정류장이 노선에 추가돼요. 한 도로 구간은 노선 하나만 쓸 수 있고, 교차점에서는 지나갈 수 있어요.</div>`:`<b>${day-1}일차가 끝나고 밤이 되었습니다.</b><div class="m">노선도와 버스를 수정하세요. 보상 1개를 고를 수 있습니다. 하루 중 새 정류장이 생겨요.</div>`)+
    (day>1?(got?'':o.map(k=>`<button data-a="g${k}">${nm[k]}</button>`).join('')):'')+
    (day>1?`<div class="m">${day}일차 아침: ${RN[0]} 러시</div><button data-a="go" ${got?'':'disabled'}>${day}일차 출발</button>`:'')}}
  $('#bar').innerHTML=L.map((l,i)=>`<button data-a="l${i}" class="${i==sel&&!mode?'on':''}" style="background:${COL[i]};color:#fff">${i+1}</button>`).join('')+
   `<button data-a="b">버스 + (${spare})</button><button data-a="u" class="${mode?'on':''}">대기공간 (${ups})</button>`}
 document.addEventListener('click',e=>{const a=e.target.dataset&&e.target.dataset.a;if(!a)return;
- if(a=='r')newGame();else if(a=='go')state='play';else if(a=='s')spd=spd==1?2:1;
+ if(a=='r')newGame();else if(a=='go')state='play';else if(a=='s')spd=spd==1?2:1;else if(a=='p'){if(state=='play')paused=!paused}
  else if(a=='b'){if(spare>0&&L[sel].stops.length>1){addBus(L[sel]);spare--}}
  else if(a=='u'){if(ups>0)mode=mode?0:1}
  else if(a[0]=='l'){sel=+a.slice(1);mode=0}
@@ -134,6 +134,20 @@ function clampView(){const r=cv.getBoundingClientRect(),mw=W*sc,mh=H*sc;
  ox=mw<=r.width?(r.width-mw)/2:Math.min(0,Math.max(r.width-mw,ox));oy=mh<=r.height?(r.height-mh)/2:Math.min(0,Math.max(r.height-mh,oy))}
 function zoomAt(f,px,py){const nz=Math.min(4,Math.max(1,zm*f));if(nz==zm)return;const wx=(px-ox)/sc,wy=(py-oy)/sc;zm=nz;sc=sc0*zm;ox=px-wx*sc;oy=py-wy*sc;clampView()}
 function cancelDrag(){if(dr&&dr.rev){const l=L[dr.li];l.seq.reverse();l.stops.reverse();rebuild(l)}dr=null}
+function routeNode(x,y){const sn=new Set(st.map(s=>s.node));let b=null,bd=22/sc;
+ L.forEach((l,li)=>{if(l.stops.length<2)return;l.seq.forEach((nd,ia)=>{if(sn.has(nd))return;const q=N[nd],d=Math.hypot(q.x-x,q.y-y)-(li==sel?3/sc:0);if(d<bd){bd=d;b={li,ia,nd}}})});return b}
+function insertStop(l,d){const D=d.D,X=D.length>1?st.find(s=>s.node==D[D.length-1]):null;
+ if(!X||l.stops.includes(X.id))return;
+ const ia=d.ins,sI=l.stops.map(id=>l.seq.indexOf(st[id].node)),nsI=Math.min(...sI.filter(i=>i>ia));
+ const G=new Map();for(let j=ia+1;j<=nsI;j++)G.set(l.seq[j],j);
+ const blocked=new Set(D);l.seq.forEach(v=>{if(!G.has(v))blocked.add(v)});blocked.delete(X.node);
+ const prev=new Map([[X.node,null]]);let fr=[X.node],hit=-1;
+ while(fr.length&&hit<0){const nx=[];for(const u of fr){for(const[v]of N[u].n){if(prev.has(v)||own.has(ek(u,v)))continue;if(G.has(v)){prev.set(v,u);hit=v;break}if(blocked.has(v))continue;prev.set(v,u);nx.push(v)}if(hit>=0)break}fr=nx}
+ if(hit<0){msg='그 정류장은 이 노선으로 이어 올 길이 없어요';msgT=3;return}
+ const ret=[];for(let c=hit;c!=null;c=prev.get(c))ret.unshift(c);
+ const j=G.get(hit),p=sI.filter(i=>i<=ia).length;
+ l.seq=l.seq.slice(0,ia).concat(D,ret.slice(1),l.seq.slice(j+1));l.stops.splice(p,0,X.id);rebuild(l);
+ msg=(X.name||'정류장')+' 정류장을 노선에 추가';msgT=3}
 function dragTo(x,y){dr.x=x;dr.y=y;
  if(!dr.m&&Math.hypot(x-dr.sx,y-dr.sy)>8/sc)dr.m=1;
  if(!dr.m||dr.mid!==undefined)return;
@@ -143,14 +157,16 @@ function dragTo(x,y){dr.x=x;dr.y=y;
  const D=dr.D,last=D[D.length-1];
  if(t==last)return;
  if(D.length>1&&t==D[D.length-2]){D.pop();return}
- if(D.length==1&&l.seq.includes(t)){const i=l.seq.indexOf(t);l.seq=l.seq.slice(0,i+1);const sn=new Set(l.seq);l.stops=l.stops.filter(id=>sn.has(st[id].node));D[0]=t;rebuild(l);return}
+ if(D.length==1&&dr.ins===undefined&&l.seq.includes(t)){const i=l.seq.indexOf(t);l.seq=l.seq.slice(0,i+1);const sn=new Set(l.seq);l.stops=l.stops.filter(id=>sn.has(st[id].node));D[0]=t;rebuild(l);return}
  if(D.includes(t)||l.seq.includes(t))return;
  const p=bridge(last,t,D,l,6);if(p)p.forEach(v=>D.push(v))}
 cv.addEventListener('pointerdown',e=>{ptrs.set(e.pointerId,lp(e));cv.setPointerCapture(e.pointerId);
  if(ptrs.size==2){cancelDrag();pan=null;const[a,b]=[...ptrs.values()];pinch={d:Math.hypot(a[0]-b[0],a[1]-b[1])||1,mx:(a[0]+b[0])/2,my:(a[1]+b[1])/2};ui();return}
  if(ptrs.size>2||pinch)return;
  const[x,y]=pt(e),s=nearStop(x,y);
- if(!s){pan={id:e.pointerId,x:e.clientX,y:e.clientY};return}
+ if(!s){const rn=state=='over'||mode?null:routeNode(x,y);
+  if(rn){sel=rn.li;dr={id:e.pointerId,li:rn.li,D:[rn.nd],x,y,sx:x,sy:y,m:0,first:false,rev:false,ins:rn.ia,cp:lp(e)};ui()}
+  else pan={id:e.pointerId,x:e.clientX,y:e.clientY};return}
  if(state=='over')return;
  if(mode){tap(s);ui();return}
  const l=L[sel],n=l.stops.length,cp=lp(e);
@@ -170,6 +186,7 @@ cv.addEventListener('pointerup',e=>{ptrs.delete(e.pointerId);
  const l=L[d.li];
  // 노선 중간 정류장을 끌어내면 그 정류장만 취소 (도로는 그대로 남음)
  if(d.mid!==undefined){if(d.m){l.stops=l.stops.filter(id=>id!=d.mid);rebuild(l);fin(l);msg=(st[d.mid].name||'정류장')+' 정차 취소 (노선은 그대로 지나가요)';msgT=3}ui();return}
+ if(d.ins!==undefined){if(d.m)insertStop(l,d);ui();return}
  if(!d.m){const[x,y]=pt(e),s=nearStop(x,y);if(s)tap(s);ui();return}
  const D=d.D,last=D[D.length-1],endStop=st.find(s=>s.node==last);
  if(D.length>=2&&endStop){
@@ -194,23 +211,24 @@ function draw(){const w=cv.width/dp,h=cv.height/dp,k=Math.sqrt(zm)/zm,now=perfor
   const e=N[D[D.length-1]];cx.beginPath();cx.arc(e.x,e.y,5*k,0,7);cx.strokeStyle=COL[dr.li];cx.lineWidth=2*k;cx.stroke()}
  if(dr&&dr.m&&dr.mid!==undefined){const a=N[st[dr.mid].node];cx.setLineDash([4*k,4*k]);cx.strokeStyle='#e5484d';cx.lineWidth=2*k;cx.beginPath();cx.moveTo(a.x,a.y);cx.lineTo(dr.x,dr.y);cx.stroke();cx.setLineDash([]);
   cx.font='bold '+(14*k)+'px system-ui';cx.fillStyle='#e5484d';cx.textAlign='center';cx.textBaseline='middle';cx.fillText('✕',dr.x,dr.y)}
- st.forEach(s=>{const n=N[s.node],r=(5+s.s*2)*k;L.forEach((l,li)=>{if(l.stops.includes(s.id)){cx.beginPath();cx.arc(n.x,n.y,r+3.4*k,0,7);cx.strokeStyle=COL[li];cx.lineWidth=2*k;cx.stroke()}});shp(n.x,n.y,s.a,r,T.card,T.ink,2.4*k);
+ st.forEach(s=>{const n=N[s.node],r=(5+s.s*2)*k;shp(n.x,n.y,s.a,r,T.card,T.ink,2.4*k);
   if(s.g>0){cx.beginPath();cx.arc(n.x,n.y,r+5*k,-1.57,-1.57+6.28*Math.min(1,s.g));cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke()}
   if(s.born){const a=now-s.born;if(a<3000){cx.globalAlpha=1-a/3000;cx.beginPath();cx.arc(n.x,n.y,r+a/3000*34*k,0,7);cx.strokeStyle='#e5484d';cx.lineWidth=2.5*k;cx.stroke();cx.globalAlpha=1}}
   s.w.forEach((p,i)=>shp(n.x+r+5*k+(i%5)*5.5*k,n.y-r+(i/5|0)*5.5*k,p.t,2.2*k,i>=s.cap?'#e5484d':T.ink))});
  cx.font=(7.5*k)+'px system-ui,"Noto Sans KR",sans-serif';cx.textAlign='center';cx.textBaseline='top';
  st.forEach(s=>{if(!s.name||(zm<1.3&&s.s<1.3))return;const n=N[s.node],r=(5+s.s*2)*k,nm=s.name.length>8?s.name.slice(0,7)+'…':s.name;
   cx.lineWidth=3*k;cx.strokeStyle=T.bg;cx.strokeText(nm,n.x,n.y+r+2*k);cx.fillStyle=T.ink;cx.fillText(nm,n.x,n.y+r+2*k)});
- L.forEach((l,li)=>l.stops.length>1&&l.len&&l.buses.forEach(b=>{const[x,y]=pos(l,b.d);cx.fillStyle=COL[li];cx.fillRect(x-7.5*k,y-5*k,15*k,10*k);
-  cx.fillStyle='#fff';cx.font='bold '+(8*k)+'px system-ui';cx.textAlign='center';cx.textBaseline='middle';cx.fillText(b.p.length,x,y+.5*k)}))}
+ L.forEach((l,li)=>l.stops.length>1&&l.len&&l.buses.forEach(b=>{const[x,y]=pos(l,b.d);cx.fillStyle=COL[li];cx.fillRect(x-14*k,y-7.5*k,28*k,15*k);
+  b.p.forEach((p,i)=>shp(x-10.5*k+(i%6)*4.2*k,y-3*k+(i/6|0)*6*k,p.t,2*k,'#fff'))}))}
 function size(){const r=$('#w').getBoundingClientRect();dp=devicePixelRatio||1;cv.width=r.width*dp;cv.height=r.height*dp;
  cv.style.width=r.width+'px';cv.style.height=r.height+'px';sc0=Math.min(r.width/W,r.height/H);sc=sc0*zm;clampView()}
+function planOpens(){const r=R(),n=r<.45?1:r<.8?2:3;opens=[];for(let i=0;i<n;i++)opens.push(8+R()*162);opens.sort((a,b)=>a-b)}
 function popSt(){if(st.length>=MAP.stations.length)return;openSt();const s=st[st.length-1];s.born=performance.now();msg='새 정류장이 생겼어요: '+(s.name||'이름 없음');msgT=5}
 function loop(now){const dt=Math.min(.05,(now-lt)/1000);lt=now;if(msgT>0)msgT-=dt;
  // 확대 상태에서 손가락을 화면 가장자리로 가져가면 지도가 따라 움직임
  if(dr&&dr.m&&dr.cp&&zm>1.05){const r=cv.getBoundingClientRect(),M=44,px=dr.cp[0],py=dr.cp[1],vx=px<M?1:px>r.width-M?-1:0,vy=py<M?1:py>r.height-M?-1:0;
   if(vx||vy){ox+=vx*240*dt;oy+=vy*240*dt;clampView();dragTo((px-ox)/sc,(py-oy)/sc)}}
- if(state=='play'){const d=dt*spd;tm+=d;if(nextOpen>0&&tm>=nextOpen){nextOpen=-1;popSt()}
+ if(state=='play'&&!paused){const d=dt*spd;tm+=d;while(opens.length&&tm>=opens[0]){opens.shift();popSt()}
   spawn(d);L.forEach(l=>l.buses.forEach(b=>stepBus(b,d)));gauges(d);if(state=='play'&&tm>=180)endDay();if(state=='play')hud()}
  draw();requestAnimationFrame(loop)}
 addEventListener('resize',size);matchMedia('(prefers-color-scheme:dark)').addEventListener('change',rt);
