@@ -5,16 +5,22 @@
 <style>
 body{font:15px/1.5 system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;padding:16px;background:#f2f3f0;color:#1f2328}
 h3{margin:0 0 12px}
-button{font:inherit;padding:10px 16px;border:0;border-radius:10px;background:#1f2328;color:#fff;font-weight:600;margin-right:6px}
+select,button{font:inherit;padding:10px 14px;border:0;border-radius:10px;margin:0 6px 6px 0}
+select{background:#fff;color:#1f2328}
+button{background:#1f2328;color:#fff;font-weight:600}
 button:disabled{opacity:.4}
 button.sub{background:#fff;color:#1f2328}
-pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:12px}
+pre{background:#fff;padding:12px;border-radius:10px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin-top:6px}
 </style></head><body>
-<h3>봉선동 지도 데이터 연결 테스트</h3>
+<h3>동네 지도 데이터 연결 테스트</h3>
+<select id="pl">
+ <option value="berlin">베를린 프렌츨라우어 베르크</option>
+ <option value="bongseon">광주 봉선동</option>
+</select><br>
 <button id="go">실행</button><button id="clr" class="sub">저장값 지우기</button>
-<pre id="log">버튼을 눌러 한 번만 실행하세요. 서버가 바쁠 땐 연달아 누르지 말고 30초 이상 기다려 주세요.</pre>
+<pre id="log">동네를 고르고 버튼을 한 번만 눌러 주세요. 서버가 바쁠 땐 연달아 누르지 말고 30초 이상 기다려 주세요.</pre>
 <script>
-const L=document.getElementById('log'),B=document.getElementById('go');
+const L=document.getElementById('log'),B=document.getElementById('go'),PL=document.getElementById('pl');
 const say=t=>{L.textContent+=(L.textContent?'\n':'')+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const SERVERS=[
@@ -24,7 +30,12 @@ const SERVERS=[
  'https://overpass.kumi.systems/api/interpreter',
  'https://overpass.private.coffee/api/interpreter'
 ];
-const KEY_BB='osm:bongseon:bb:v1',KEY_PREF='osm:pref:v1';
+// 좌표 범위를 미리 알고 있는 동네는 경계 검색 요청을 생략한다 (대략적인 범위)
+const PLACES={
+ berlin:{label:'베를린 프렌츨라우어 베르크',bb:{S:52.530,W:13.405,N:52.550,E:13.440}},
+ bongseon:{label:'광주 봉선동',find:/^봉선[0-9]?동$/.source,area:[34.9,126.5,35.4,127.3],pl:'^봉선'}
+};
+const KEY_PREF='osm:pref:v1',keyBB=id=>'osm:bb:'+id+':v1';
 const lget=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
 const lset=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 let pref=+lget(KEY_PREF)||0;
@@ -45,60 +56,69 @@ async function once(url,ql,ms){
   return await r.json();
  }finally{clearTimeout(t)}
 }
-// 서버를 돌아가며 시도하고, 전부 바쁘면 잠시 기다렸다가 다시 시도 (최대 3바퀴)
+// 서버를 한 번씩 돌아가며 시도 (재시도 반복은 하지 않음)
 async function ovAny(ql){
  const n=SERVERS.length;let last;
- for(let round=0;round<1;round++){
-  for(let k=0;k<n;k++){
-   const i=(pref+k)%n,host=SERVERS[i].replace('https://','').split('/')[0];
-   try{
-    const t0=performance.now();
-    const j=await once(SERVERS[i],ql,25000);
-    say(`   ✅ ${host} (${Math.round(performance.now()-t0)}ms)`);
-    pref=i;lset(KEY_PREF,i);
-    return j;
-   }catch(e){last=e;say(`   ✖ ${host}: ${short(e)}`)}
-  }
-  if(round<2){const w=3*(round+1);say(`   …모두 안 됨. ${w}초 뒤 다시 시도 (${round+2}/3)`);await sleep(w*1000)}
+ for(let k=0;k<n;k++){
+  const i=(pref+k)%n,host=SERVERS[i].replace('https://','').split('/')[0];
+  try{
+   const t0=performance.now();
+   const j=await once(SERVERS[i],ql,25000);
+   say(`   ✅ ${host} (${Math.round(performance.now()-t0)}ms)`);
+   pref=i;lset(KEY_PREF,i);
+   return j;
+  }catch(e){last=e;say(`   ✖ ${host}: ${short(e)}`)}
  }
  throw last||new Error('모든 서버 실패');
 }
-// 봉선동 범위 찾기: 행정경계(봉선동/봉선1동/봉선2동)를 합치고, 없으면 지명 위치 주변으로
-async function findBox(){
- const j=await ovAny('[out:json][timeout:25];rel["name"~"^봉선[0-9]?동$"]["boundary"="administrative"](34.9,126.5,35.4,127.3);out bounds;');
+// 경계를 모르는 동네: 행정경계를 찾고, 없으면 지명 위치 주변으로
+async function findBox(p){
+ const a=p.area.join(',');
+ const j=await ovAny(`[out:json][timeout:25];rel["name"~"${p.find}"]["boundary"="administrative"](${a});out bounds;`);
  const els=(j.elements||[]).filter(e=>e.bounds);
  if(els.length){
-  const bb={S:Math.min(...els.map(e=>e.bounds.minlat)),W:Math.min(...els.map(e=>e.bounds.minlon)),N:Math.max(...els.map(e=>e.bounds.maxlat)),E:Math.max(...els.map(e=>e.bounds.maxlon))};
   say(`   행정경계 ${els.length}개를 합쳤어요`);
-  return bb;
+  return{S:Math.min(...els.map(e=>e.bounds.minlat)),W:Math.min(...els.map(e=>e.bounds.minlon)),N:Math.max(...els.map(e=>e.bounds.maxlat)),E:Math.max(...els.map(e=>e.bounds.maxlon))};
  }
  say('   행정경계가 없어서 지명 위치로 대체해요');
- const j2=await ovAny('[out:json][timeout:25];nwr["name"~"^봉선"]["place"](34.9,126.5,35.4,127.3);out center;');
- const p=(j2.elements||[]).map(e=>e.center||(e.lat!=null?{lat:e.lat,lon:e.lon}:null)).find(Boolean);
- if(!p)throw new Error('봉선동을 찾지 못함');
+ const j2=await ovAny(`[out:json][timeout:25];nwr["name"~"${p.pl}"]["place"](${a});out center;`);
+ const q=(j2.elements||[]).map(e=>e.center||(e.lat!=null?{lat:e.lat,lon:e.lon}:null)).find(Boolean);
+ if(!q)throw new Error('동네를 찾지 못함');
  const d=0.012;
- return{S:p.lat-d,W:p.lon-d,N:p.lat+d,E:p.lon+d};
+ return{S:q.lat-d,W:q.lon-d,N:q.lat+d,E:q.lon+d};
 }
 async function run(){
  L.textContent='';B.disabled=true;
+ const id=PL.value,p=PLACES[id];
  try{
-  say('1. 봉선동 범위');
-  let bb=lget(KEY_BB);
-  if(bb){say('   저장된 범위를 사용해요')}
-  else{bb=await findBox();lset(KEY_BB,bb)}
+  say(`1. ${p.label} 범위`);
+  let bb=p.bb||lget(keyBB(id));
+  if(p.bb)say('   미리 정해 둔 범위를 사용해요 (요청 생략)');
+  else if(bb)say('   저장된 범위를 사용해요');
+  else{bb=await findBox(p);lset(keyBB(id),bb)}
   say(`   위도 ${bb.S.toFixed(4)}~${bb.N.toFixed(4)}, 경도 ${bb.W.toFixed(4)}~${bb.E.toFixed(4)}`);
-  say('\n2. 도로·건물·버스정류장 개수 (개수만 세는 가벼운 요청)');
-  const box=`(${bb.S},${bb.W},${bb.N},${bb.E})`;
-  const j=await ovAny(`[out:json][timeout:30];way["highway"]${box}->.r;way["building"]${box}->.b;node["highway"="bus_stop"]${box}->.s;.r out count;.b out count;.s out count;`);
+  say('\n2. 도로·건물·버스정류장 개수 (개수만 세는 가벼운 요청 1번)');
+  const x=`(${bb.S},${bb.W},${bb.N},${bb.E})`;
+  const j=await ovAny(`[out:json][timeout:30];
+way["highway"]${x}->.r;
+way["building"]${x}->.b;
+way["building"~"^(apartments|residential|house|detached|terrace|dormitory)$"]${x}->.res;
+way["building"~"^(commercial|retail|office|industrial|warehouse)$"]${x}->.wk;
+way["building"~"^(school|university|college|hospital|public|civic|government|kindergarten)$"]${x}->.pb;
+node["highway"="bus_stop"]${x}->.s;
+.r out count;.b out count;.res out count;.wk out count;.pb out count;.s out count;`);
   const c=(j.elements||[]).filter(e=>e.type==='count').map(e=>+(e.tags&&e.tags.total)||0);
-  if(c.length<3)throw new Error('개수 응답이 이상해요');
-  say(`   도로 ${c[0]}개 / 건물 ${c[1]}개 / 버스정류장 ${c[2]}개`);
+  if(c.length<6)throw new Error('개수 응답이 이상해요');
+  const [r,b,res,wk,pb,s]=c,typed=res+wk+pb,pct=b?Math.round(typed/b*100):0;
+  say(`   도로 ${r}개 / 버스정류장 ${s}개`);
+  say(`   건물 ${b}개 중 용도가 구분된 건물 ${typed}개 (${pct}%)`);
+  say(`   · 주거 ${res} · 일터 ${wk} · 공공 ${pb}`);
   say('\n✅ 지도 데이터 받기 성공');
  }catch(e){
   say('\n❌ 실패: '+short(e));
-  say('서버가 바쁜 시간대일 수 있어요. 몇 분 뒤 "다시 실행"을 눌러 보세요.');
+  say('서버가 바쁜 시간대일 수 있어요. 몇 분 뒤 다시 눌러 보세요.');
  }finally{B.disabled=false}
 }
 B.onclick=run;
-document.getElementById('clr').onclick=()=>{try{localStorage.removeItem(KEY_BB);localStorage.removeItem(KEY_PREF)}catch(e){}pref=0;say('\n저장값을 지웠어요.')};
+document.getElementById('clr').onclick=()=>{try{Object.keys(localStorage).filter(k=>k.startsWith('osm:')).forEach(k=>localStorage.removeItem(k))}catch(e){}pref=0;say('\n저장값을 지웠어요.')};
 </script></body></html>
